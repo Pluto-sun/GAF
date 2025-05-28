@@ -23,16 +23,16 @@ class ClusteredInception(nn.Module):
             self.group_convs = nn.ModuleList([
                 nn.Sequential(
                     # 第一层卷积 + SKAttention
-                    BasicConv2d(len(group), 32, kernel_size=3, stride=1, padding=1),
+                    BasicConv2d(len(group), 32, kernel_size=3, stride=1, padding=1, use_bn=False),
                     SKAttention(channel=32, kernels=[1,3,5], reduction=8),
                     # 第二层卷积 + SKAttention
-                    BasicConv2d(32, 32, kernel_size=3, stride=1, padding=1),
+                    BasicConv2d(32, 32, kernel_size=3, stride=1, padding=1, use_bn=False),
                     SKAttention(channel=32, kernels=[1,3,5], reduction=8),
                     # 第三层卷积 + SKAttention
-                    BasicConv2d(32, 48, kernel_size=3, stride=1, padding=1),
+                    BasicConv2d(32, 48, kernel_size=3, stride=1, padding=1, use_bn=False),
                     SKAttention(channel=48, kernels=[1,3,5], reduction=8),
                     # 1x1卷积 + SKAttention
-                    BasicConv2d(48, 48, kernel_size=1),
+                    BasicConv2d(48, 48, kernel_size=1, use_bn=False),
                     SKAttention(channel=48, kernels=[1,3], reduction=8),
                 ) for group in self.channel_groups
             ])
@@ -40,10 +40,10 @@ class ClusteredInception(nn.Module):
             # 特征融合层 - 将分组特征融合为统一表示，保持空间尺寸，添加SKAttention
             self.fusion_conv = nn.Sequential(
                 # 通道融合 + SKAttention
-                BasicConv2d(48 * self.num_groups, 192, kernel_size=1),
+                BasicConv2d(48 * self.num_groups, 192, kernel_size=1, use_bn=False),
                 SKAttention(channel=192, kernels=[1,3], reduction=16),
                 # 空间特征提取 + SKAttention
-                BasicConv2d(192, 192, kernel_size=3, stride=1, padding=1),
+                BasicConv2d(192, 192, kernel_size=3, stride=1, padding=1, use_bn=False),
                 SKAttention(channel=192, kernels=[1,3,5], reduction=16),
             )
             

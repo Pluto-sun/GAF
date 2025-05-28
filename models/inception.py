@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.jit.annotations import Optional
 from torch import Tensor
+from .utils import load_state_dict_from_url
 
 
 __all__ = ['Inception3', 'inception_v3', 'InceptionOutputs', '_InceptionOutputs']
@@ -430,12 +431,15 @@ class InceptionAux(nn.Module):
 
 class BasicConv2d(nn.Module):
 
-    def __init__(self, in_channels, out_channels, **kwargs):
+    def __init__(self, in_channels, out_channels, use_bn=True, **kwargs):
         super(BasicConv2d, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, bias=False, **kwargs)
-        self.bn = nn.BatchNorm2d(out_channels, eps=0.001)
+        self.use_bn = use_bn
+        if use_bn:
+            self.bn = nn.BatchNorm2d(out_channels, eps=0.001)
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.bn(x)
+        if self.use_bn:
+            x = self.bn(x)
         return F.relu(x, inplace=True)
