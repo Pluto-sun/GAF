@@ -2,7 +2,7 @@
 dataset/
 
 # 忽略整个 result 目录
-result/
+results/
 
 # 忽略整个 checkpoints 目录
 checkpoints/
