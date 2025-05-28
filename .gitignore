@@ -12,3 +12,4 @@ checkpoints/
 *.pyc        # 忽略 Python 编译文件
 __pycache__/ # 忽略 Python 缓存目录
 *.pickle
+.idea
