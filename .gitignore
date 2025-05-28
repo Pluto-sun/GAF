@@ -1,0 +1,13 @@
+# 忽略整个 dataset 目录
+dataset/
+
+# 忽略整个 result 目录
+result/
+
+# 忽略整个 checkpoints 目录
+checkpoints/
+
+# 可选：忽略特定类型的文件（根据需求添加）
+*.log        # 忽略所有 .log 文件
+*.pyc        # 忽略 Python 编译文件
+__pycache__/ # 忽略 Python 缓存目录
