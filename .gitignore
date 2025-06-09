@@ -13,3 +13,5 @@ checkpoints/
 __pycache__/ # 忽略 Python 缓存目录
 *.pickle
 .idea
+data_provider/__pycache__/
+*/__pycache__/
