@@ -2,7 +2,7 @@ import argparse
 import os
 import torch
 import torch.backends
-from exp.exp_classification import Exp_Classification
+from exp.exp import Exp
 from utils.print_args import print_args
 import random
 import numpy as np
@@ -29,7 +29,8 @@ if __name__ == '__main__':
     parser.add_argument('--step', type=int, required=True, help='slide step')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
     parser.add_argument('--num_class', type=int, default=2, help='number of classes for classification')
-
+    parser.add_argument('--result_path', type=str, default='./result/', help='result path')
+    parser.add_argument('--test_size', type=float, default=0.2, help='test size')
     # model define
     parser.add_argument('--seq_len', type=int, default=64, help='input sequence length')
     parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
@@ -49,10 +50,18 @@ if __name__ == '__main__':
     parser.add_argument('--activation', type=str, default='gelu', help='activation')
     parser.add_argument('--use_norm', type=int, default=1, help='whether to use normalize; True 1 False 0')
     parser.add_argument('--gaf_method', type=str, default='summation', help='GAF method; summation or difference')
-    
+    parser.add_argument('--feature_dim', type=int, default=32, help='feature dimension')
+    parser.add_argument('--data_type_method', type=str, default='float32', 
+                        help='Data type conversion method; options: [float32, uint8, uint16]')
+    # GNN
+    parser.add_argument('--use_attention', type=bool, default=True, help='use attention')
+    parser.add_argument('--hidden_dim', type=int, default=64, help='hidden dimension')
+    parser.add_argument('--sample_size', type=int, default=10000, help='sample size')
     # 添加通道分组参数
     parser.add_argument('--channel_groups', type=str, default=None,
                         help='Channel grouping for ClusteredResNet. Format: "0,1,2|3,4,5|6,7,8"')
+    parser.add_argument('--hvac_groups', type=str, default=None,
+                        help='HVAC signal grouping for MultiImageFeatureNet. Format: "SA_TEMP,OA_TEMP|OA_CFM,RA_CFM|SA_SP"')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
@@ -87,6 +96,22 @@ if __name__ == '__main__':
             print(f"Error parsing channel_groups: {e}")
             print("Using default channel grouping")
             args.channel_groups = None
+    
+    # 处理HVAC信号分组参数
+    if args.hvac_groups is not None:
+        try:
+            # 将字符串格式的HVAC分组转换为列表格式
+            args.hvac_groups = [
+                [signal.strip() for signal in group.split(',')]
+                for group in args.hvac_groups.split('|')
+            ]
+            print(f"HVAC Groups parsed: {len(args.hvac_groups)} groups")
+            for i, group in enumerate(args.hvac_groups):
+                print(f"  Group {i}: {group}")
+        except Exception as e:
+            print(f"Error parsing hvac_groups: {e}")
+            print("Using default HVAC grouping")
+            args.hvac_groups = None
 
     if torch.cuda.is_available() and args.use_gpu:
         args.device = torch.device('cuda:{}'.format(args.gpu))
@@ -107,34 +132,32 @@ if __name__ == '__main__':
     print('Args in experiment:')
     print_args(args)
 
-    Exp = Exp_Classification
-
+    print("CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    print("torch.cuda.device_count():", torch.cuda.device_count())
+    print("torch.cuda.current_device():", torch.cuda.current_device())
+    print("torch.cuda.get_device_name(0):", torch.cuda.get_device_name(0))
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
     if args.is_training:
         for ii in range(args.itr):
             # setting record of experiments
-            exp = Exp(args)  # set experiments
-            setting = '{}_{}_{}_{}_sl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_gaf{}_{}_{}'.format(
-                args.task_name,
+            setting = '{}_{}_{}_sl{}_step{}_gaf{}_fd{}_dtype{}_{}'.format(
                 args.model_id,
                 args.model,
                 args.data,
                 args.seq_len,
-                args.d_model,
-                args.n_heads,
-                args.e_layers,
-                args.d_layers,
-                args.d_ff,
-                args.factor,
-                args.embed,
-                args.distil,
+                args.step,
                 args.gaf_method,
+                args.feature_dim,
+                args.data_type_method,
                 args.des, ii)
-
+            exp = Exp(args,setting)  # set experiments
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-            exp.train(setting)
+            exp.train()
+            exp.evaluate_report()
 
-            print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.test(setting)
+            print('>>>>>>>validating : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+            exp.vali()
             if args.gpu_type == 'mps':
                 torch.backends.mps.empty_cache()
             elif args.gpu_type == 'cuda':
@@ -142,24 +165,18 @@ if __name__ == '__main__':
     else:
         exp = Exp(args)  # set experiments
         ii = 0
-        setting = '{}_{}_{}_{}_sl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_gaf{}_{}_{}'.format(
-            args.task_name,
+        setting = '{}_{}_{}_sl{}_step{}_gaf{}_fd{}_dtype{}_{}'.format(
             args.model_id,
             args.model,
             args.data,
             args.seq_len,
-            args.d_model,
-            args.n_heads,
-            args.e_layers,
-            args.d_layers,
-            args.d_ff,
-            args.factor,
-            args.embed,
-            args.distil,
+            args.step,
             args.gaf_method,
+            args.feature_dim,
+            args.data_type_method,
             args.des, ii)
 
-        print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+        print('>>>>>>>validating : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
         exp.test(setting, test=1)
         if args.gpu_type == 'mps':
             torch.backends.mps.empty_cache()

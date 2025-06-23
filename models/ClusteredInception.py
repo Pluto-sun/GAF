@@ -80,8 +80,6 @@ class ClusteredInception(nn.Module):
         # 输入形状: [B, H, W, C]
         batch_size = x.size(0)
         
-        # 调整输入维度顺序 [B, H, W, C] -> [B, C, H, W]
-        x = x.permute(0, 3, 1, 2)
         
         if self.use_clustering:
             # 分组处理模式
