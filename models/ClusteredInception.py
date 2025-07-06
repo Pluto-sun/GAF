@@ -77,9 +77,8 @@ class ClusteredInception(nn.Module):
                     nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        # 输入形状: [B, H, W, C]
+        # 输入形状: [B, C, H, W]
         batch_size = x.size(0)
-        
         
         if self.use_clustering:
             # 分组处理模式

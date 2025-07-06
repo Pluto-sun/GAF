@@ -52,7 +52,6 @@ python -u run.py \
   --data_type_method uint8 \
   --step 96 \
   --seq_len 96 \
-  --num_class 4 \
   --e_layers 2 \
   --batch_size 16 \
   --d_model 512 \
@@ -64,7 +63,7 @@ python -u run.py \
   --des "Inception_Clustered" \
   --itr 1 \
   --learning_rate 0.0001 \
-  --train_epochs 100 \
+  --train_epochs 1 \
   --patience 10 \
   --use_gpu True \
   --gpu 0 \

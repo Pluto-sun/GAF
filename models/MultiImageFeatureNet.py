@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from models.SKNets import SKAttention
 
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -155,24 +155,30 @@ class NoPaddingLargeKernelFeatureExtractor(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
+        self.SK_1 = SKAttention(channel=32, kernels=[1,3,5], reduction=8)
         self.conv2 = nn.Sequential(
             nn.Conv2d(32, 64, kernel_size=6, stride=1, padding=0),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
+        self.SK_2 = SKAttention(channel=64, kernels=[1,3,5], reduction=8)
         self.conv3 = nn.Sequential(
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
+        self.SK_3 = SKAttention(channel=128, kernels=[1,3,5], reduction=8)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(128, feature_dim)
 
     def forward(self, x):
         # x: [N, 1, 64, 64]
         x = self.conv1(x)
+        x = self.SK_1(x)
         x = self.conv2(x)
+        x = self.SK_2(x)
         x = self.conv3(x)
+        x = self.SK_3(x)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
@@ -206,7 +212,7 @@ class MultiScaleConvLayer(nn.Module):
         return x
 
 class MultiScaleStackedFeatureExtractor(nn.Module):
-    def __init__(self, feature_dim=32, channels_list=[16, 16],):
+    def __init__(self, feature_dim=32, channels_list=[32, 64, 128],):
         super().__init__()
         self.channels_list = channels_list
         self.feature_dim = feature_dim
@@ -262,7 +268,7 @@ class MultiImageFeatureNet(nn.Module):
             print(f"通道分组映射: {self.channel_to_group}")
         else:
             # 不使用分组，所有通道共用一个特征提取器
-            self.feature_extractor = InceptionFeatureExtractor(feature_dim)
+            self.feature_extractor = NoPaddingLargeKernelFeatureExtractor(feature_dim)
             print("使用默认特征提取：所有通道共用一个特征提取器")
         
         # Transformer编码器

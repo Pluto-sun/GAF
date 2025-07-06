@@ -41,10 +41,19 @@ class EarlyStopping:
 
     def __call__(self, val_loss, model, path):
         score = -val_loss
+        # 检查F1分数是否达到100%（val_loss接近-1.0）
+        # 使用小的epsilon来处理浮点数精度问题
+        eps = 1e-5
+        if abs(val_loss + 1.0) < eps:  # F1分数为100%
+            print(f'F1分数达到100%！立刻保存模型并早停')
+            self.save_checkpoint(val_loss, model, path)
+            self.early_stop = True
+            return
+            
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(val_loss, model, path)
-        elif score < self.best_score + self.delta:
+        elif score <= self.best_score + self.delta:
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
             if self.counter >= self.patience:

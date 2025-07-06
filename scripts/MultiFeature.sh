@@ -13,17 +13,17 @@ python -u run.py \
   --seq_len 96 \
   --num_class 5 \
   --e_layers 2 \
-  --batch_size 16 \
+  --batch_size 4 \
   --d_model 512 \
   --d_ff 2048 \
-  --feature_dim 32 \
+  --feature_dim 128 \
   --n_heads 8 \
   --d_layers 1 \
   --dropout 0.1 \
-  --des 'Exp' \
+  --des 'large-kernel-SK' \
   --itr 1 \
   --learning_rate 0.0001 \
-  --train_epochs 1000 \
+  --train_epochs 1 \
   --patience 10 \
   --use_gpu True \
   --gpu 0 \

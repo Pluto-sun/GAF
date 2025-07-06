@@ -4,10 +4,30 @@ import torch
 import torch.backends
 from exp.exp import Exp
 from utils.print_args import print_args
+from utils.memory_cleaner import MemoryCleaner
 import random
 import numpy as np
+import atexit
+import signal
+import sys
+
+def cleanup_handler(signum=None, frame=None):
+    """信号处理函数，用于程序被中断时清理内存"""
+    print(f"\n程序被中断 (信号: {signum})，正在清理内存...")
+    MemoryCleaner.full_cleanup()
+    MemoryCleaner.print_memory_info()
+    sys.exit(0)
+
+# 注册信号处理器
+signal.signal(signal.SIGINT, cleanup_handler)   # Ctrl+C
+signal.signal(signal.SIGTERM, cleanup_handler)  # 终止信号
 
 if __name__ == '__main__':
+    # 程序开始时检查和清理内存
+    print("=== 程序启动 ===")
+    MemoryCleaner.print_memory_info()
+    MemoryCleaner.full_cleanup()
+    
     fix_seed = 2021
     random.seed(fix_seed)
     torch.manual_seed(fix_seed)
@@ -16,10 +36,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GAF Classification')
 
     # basic config
-    parser.add_argument('--task_name', type=str, required=True, default='classification',
+    parser.add_argument('--task_name', type=str, required=False, default='classification',
                         help='task name, options:[classification]')
-    parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
-    parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
+    parser.add_argument('--is_training', type=int, required=False, default=1, help='status')
+    parser.add_argument('--model_id', type=str, required=False, default='test', help='model id')
     parser.add_argument('--model', type=str, required=True, default='Autoformer',
                         help='model name, options: [Autoformer, Transformer, TimesNet]')
 
@@ -51,29 +71,115 @@ if __name__ == '__main__':
     parser.add_argument('--use_norm', type=int, default=1, help='whether to use normalize; True 1 False 0')
     parser.add_argument('--gaf_method', type=str, default='summation', help='GAF method; summation or difference')
     parser.add_argument('--feature_dim', type=int, default=32, help='feature dimension')
-    parser.add_argument('--data_type_method', type=str, default='float32', 
+    parser.add_argument('--data_type_method', type=str, default='uint8', 
                         help='Data type conversion method; options: [float32, uint8, uint16]')
     # GNN
     parser.add_argument('--use_attention', type=bool, default=True, help='use attention')
     parser.add_argument('--hidden_dim', type=int, default=64, help='hidden dimension')
-    parser.add_argument('--sample_size', type=int, default=10000, help='sample size')
+    parser.add_argument('--sample_size', type=int, default=1000, help='sample size')
     # 添加通道分组参数
     parser.add_argument('--channel_groups', type=str, default=None,
                         help='Channel grouping for ClusteredResNet. Format: "0,1,2|3,4,5|6,7,8"')
     parser.add_argument('--hvac_groups', type=str, default=None,
                         help='HVAC signal grouping for MultiImageFeatureNet. Format: "SA_TEMP,OA_TEMP|OA_CFM,RA_CFM|SA_SP"')
+    
+    # 双路网络模块配置参数
+    parser.add_argument('--extractor_type', type=str, default='large_kernel',
+                        help='Feature extractor type for DualGAFNet. Options: [large_kernel, inception, dilated, multiscale]')
+    parser.add_argument('--fusion_type', type=str, default='adaptive',
+                        help='Feature fusion type for DualGAFNet. Options: [adaptive, concat, bidirectional, gated, add, mul, weighted_add]')
+    parser.add_argument('--attention_type', type=str, default='channel',
+                        help='Attention type for DualGAFNet. Options: [channel, spatial, cbam, self, none]')
+    parser.add_argument('--classifier_type', type=str, default='mlp',
+                        help='Classifier type for DualGAFNet. Options: [mlp, simple, residual, residual_bottleneck, residual_dense]')
+    
+    # 统计特征配置（新增）
+    parser.add_argument('--use_statistical_features', action='store_true', default=False, help='是否使用统计特征')
+    parser.add_argument('--stat_type', type=str, default='comprehensive',
+                       choices=['basic', 'comprehensive', 'correlation_focused'], help='统计特征类型')
+    parser.add_argument('--multimodal_fusion_strategy', type=str, default='concat',
+                       choices=['concat', 'attention', 'gated', 'adaptive'], help='多模态融合策略')
+
+    # 消融实验配置参数
+    parser.add_argument('--use_diff_branch', action='store_true', default=True,
+                       help='是否使用差分分支进行GAF融合（消融实验开关）。False时仅使用sum分支')
+    parser.add_argument('--ablation_mode', type=str, default='none',
+                       choices=['none', 'no_diff', 'no_stat', 'no_attention', 'minimal'],
+                       help='消融实验模式快捷设置: none(完整模型), no_diff(无差分分支), no_stat(无统计特征), no_attention(无注意力), minimal(最简模型)')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
     parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
-    parser.add_argument('--patience', type=int, default=3, help='early stopping patience')
+    parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
+    
+    # 梯度累积优化（针对小batch训练）
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1, 
+                        help='梯度累积步数。设为>1时实现梯度累积，有效batch_size = batch_size * gradient_accumulation_steps')
+    parser.add_argument('--enable_auto_gradient_accumulation', action='store_true', default=False,
+                        help='根据batch_size自动启用梯度累积（batch_size<8时自动设为2，<4时自动设为4）')
+    
+    # 高级损失函数配置（用于解决类别相似性问题）
+    parser.add_argument('--loss_type', type=str, default='ce', 
+                        choices=['ce', 'label_smoothing', 'focal', 'confidence_penalty', 'combined',
+                                'label_smoothing_optimized', 'hybrid_focal', 'adaptive_smoothing'],
+                        help='损失函数类型: ce(交叉熵), label_smoothing(标签平滑), focal(焦点损失), confidence_penalty(置信度惩罚), combined(组合损失), label_smoothing_optimized(优化标签平滑), hybrid_focal(混合焦点损失), adaptive_smoothing(自适应平滑)')
+    
+    # 标签平滑参数
+    parser.add_argument('--label_smoothing', type=float, default=0.1,
+                        help='标签平滑因子 (0.0-0.5)，推荐值：相似类别0.1-0.2，差异较大类别0.05-0.1')
+    
+    # Focal Loss参数
+    parser.add_argument('--focal_alpha', type=float, default=1.0,
+                        help='Focal Loss的alpha参数，用于平衡正负样本')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                        help='Focal Loss的gamma参数，控制难样本的聚焦程度 (1.0-3.0)')
+    
+    # 置信度惩罚参数
+    parser.add_argument('--confidence_penalty_beta', type=float, default=0.1,
+                        help='置信度惩罚强度 (0.01-0.2)，较高值会减少过度自信')
+    
+    # 优化损失函数参数（基于性能测试：timm实现比自定义实现快10-20%）
+    parser.add_argument('--use_timm_loss', action='store_true', default=True,
+                        help='优先使用timm优化实现，性能提升10-20%，内存效率更高')
+    parser.add_argument('--adaptive_initial_smoothing', type=float, default=0.2,
+                        help='自适应标签平滑初始值（训练开始时）')
+    parser.add_argument('--adaptive_final_smoothing', type=float, default=0.05,
+                        help='自适应标签平滑最终值（训练结束时）')
+    parser.add_argument('--adaptive_decay_epochs', type=int, default=30,
+                        help='自适应平滑衰减周期（epoch数）')
+    
+    # 类别权重（用于处理类别不平衡）- 默认禁用，适用于平衡数据集
+    parser.add_argument('--enable_class_weights', action='store_true', 
+                        help='启用类别权重（仅当数据不平衡时使用）')
+    parser.add_argument('--class_weights', type=str, default=None,
+                        help='手动指定类别权重，格式为逗号分隔的数字，如 "1.0,2.0,1.5"')
+    
+    # 损失函数预设配置
+    parser.add_argument('--loss_preset', type=str, default=None,
+                        choices=['hvac_similar', 'imbalanced_focus', 'hard_samples', 'overconfidence_prevention',
+                                'hvac_similar_optimized', 'hvac_adaptive', 'hvac_hard_samples', 'production_optimized'],
+                        help='损失函数预设配置: hvac_similar(HVAC相似类别), imbalanced_focus(类别不平衡), hard_samples(难分类样本), overconfidence_prevention(防止过度自信), hvac_similar_optimized(HVAC相似类别+高性能优化,推荐), hvac_adaptive(HVAC自适应平滑), hvac_hard_samples(HVAC难样本聚焦), production_optimized(生产环境优化)')
+
+    # parallel processing optimization (并行处理优化)
+    parser.add_argument('--n_jobs', type=int, default=16, 
+                        help='Number of parallel jobs for data processing. -1 means auto-detect (min(cpu_count, 8))')
+    parser.add_argument('--use_multiprocessing', action='store_true', default=True,
+                        help='Enable multiprocessing for GAF generation and data conversion')
+    parser.add_argument('--chunk_size', type=int, default=800,
+                        help='Chunk size for parallel processing. Larger values use more memory but reduce overhead')
+    parser.add_argument('--disable_parallel', action='store_true', default=False,
+                        help='Disable all parallel processing optimizations (useful for debugging)')
+    parser.add_argument('--use_shared_memory', action='store_true', default=True,
+                        help='Enable shared memory optimization for faster inter-process communication')
+    parser.add_argument('--disable_shared_memory', action='store_true', default=False,
+                        help='Disable shared memory optimization (fallback to standard multiprocessing)')
 
     # GPU
     parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
@@ -83,6 +189,132 @@ if __name__ == '__main__':
     parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
 
     args = parser.parse_args()
+    
+    # 处理并行处理参数
+    import multiprocessing as mp
+    import sys
+    if args.disable_parallel:
+        # 禁用所有并行处理
+        args.use_multiprocessing = False
+        args.use_shared_memory = False
+        args.n_jobs = 1
+        print("🔧 并行处理已禁用 (disable_parallel=True)")
+    else:
+        # 自动检测CPU核心数
+        if args.n_jobs == -1:
+            args.n_jobs = min(mp.cpu_count(), 8)  # 限制最大进程数
+        elif args.n_jobs <= 0:
+            args.n_jobs = 1
+        
+        # 处理共享内存配置
+        if args.disable_shared_memory:
+            args.use_shared_memory = False
+            print("🔧 共享内存优化已禁用")
+        elif sys.version_info < (3, 8):
+            args.use_shared_memory = False
+            print("⚠️ Python版本过低，禁用共享内存优化 (需要Python 3.8+)")
+        
+        # 根据系统资源调整参数
+        available_memory_gb = None
+        try:
+            import psutil
+            available_memory_gb = psutil.virtual_memory().available / (1024**3)
+        except ImportError:
+            print("⚠️ psutil未安装，无法自动检测内存大小")
+        
+        # 根据内存大小调整chunk_size - 针对高端服务器优化
+        if available_memory_gb is not None:
+            cpu_cores = mp.cpu_count()
+            
+            if available_memory_gb < 8:  # 小内存系统
+                args.chunk_size = min(args.chunk_size, 50)
+                args.n_jobs = min(args.n_jobs, 2)
+                print(f"💾 检测到小内存系统 ({available_memory_gb:.1f}GB)，调整参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+            elif available_memory_gb < 32:  # 中等内存系统
+                args.chunk_size = max(args.chunk_size, 200)
+                args.n_jobs = min(args.n_jobs, 8)
+                print(f"💾 检测到中等内存系统 ({available_memory_gb:.1f}GB)，调整参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+            elif available_memory_gb < 64:  # 大内存系统
+                args.chunk_size = max(args.chunk_size, 400)
+                args.n_jobs = min(args.n_jobs, 16)
+                print(f"💾 检测到大内存系统 ({available_memory_gb:.1f}GB)，优化参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+            else:  # 超大内存服务器 (您的配置)
+                # 针对32核128GB的高端配置
+                if cpu_cores >= 32:
+                    # 使用适中的进程数，避免过度并行
+                    args.n_jobs = min(args.n_jobs, 20)  # 留出一些核心给系统
+                    args.chunk_size = max(args.chunk_size, 800)  # 大块大小减少开销
+                    print(f"🚀 检测到高端服务器 ({available_memory_gb:.1f}GB, {cpu_cores}核)，高性能配置：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+                else:
+                    args.chunk_size = max(args.chunk_size, 600)
+                    print(f"💾 检测到超大内存系统 ({available_memory_gb:.1f}GB)，优化参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+        
+        shared_memory_status = "启用" if args.use_shared_memory else "禁用"
+        print(f"🚀 并行处理配置 - 进程数: {args.n_jobs}, 多进程: {args.use_multiprocessing}, 块大小: {args.chunk_size}, 共享内存: {shared_memory_status}")
+    
+    # 处理消融实验模式（在其他参数处理之前）
+    if args.ablation_mode != 'none':
+        print(f"\n🔬 应用消融实验模式: {args.ablation_mode}")
+        
+        if args.ablation_mode == 'no_diff':
+            # 移除差分分支
+            args.use_diff_branch = False
+            print(f"   ❌ 禁用差分分支 (use_diff_branch=False)")
+            
+        elif args.ablation_mode == 'no_stat':
+            # 移除统计特征
+            args.use_statistical_features = False
+            print(f"   ❌ 禁用统计特征 (use_statistical_features=False)")
+            
+        elif args.ablation_mode == 'no_attention':
+            # 移除注意力机制
+            args.attention_type = 'none'
+            print(f"   ❌ 禁用注意力机制 (attention_type=none)")
+            
+        elif args.ablation_mode == 'minimal':
+            # 最简化模型：移除所有高级组件
+            args.use_diff_branch = False
+            args.use_statistical_features = False
+            args.attention_type = 'none'
+            print(f"   ❌ 禁用差分分支 (use_diff_branch=False)")
+            print(f"   ❌ 禁用统计特征 (use_statistical_features=False)")
+            print(f"   ❌ 禁用注意力机制 (attention_type=none)")
+            print(f"   💡 现在使用最简化模型（仅sum分支 + 基础ResNet）")
+        
+        print(f"🔬 消融实验配置完成\n")
+    else:
+        # 显示当前完整模型配置
+        ablation_status = []
+        if not args.use_diff_branch:
+            ablation_status.append("差分分支已禁用")
+        if not args.use_statistical_features:
+            ablation_status.append("统计特征已禁用")
+        if args.attention_type == 'none':
+            ablation_status.append("注意力机制已禁用")
+        
+        if ablation_status:
+            print(f"\n🔬 手动消融配置: {' + '.join(ablation_status)}")
+        else:
+            print(f"\n🔬 使用完整模型（未启用消融实验）")
+    
+    # 处理梯度累积参数
+    if args.enable_auto_gradient_accumulation:
+        if args.batch_size < 4:
+            args.gradient_accumulation_steps = 4
+            print(f"🔄 自动梯度累积: batch_size={args.batch_size} < 4，设置累积步数为{args.gradient_accumulation_steps}")
+        elif args.batch_size < 8:
+            args.gradient_accumulation_steps = 2
+            print(f"🔄 自动梯度累积: batch_size={args.batch_size} < 8，设置累积步数为{args.gradient_accumulation_steps}")
+        else:
+            print(f"🔄 自动梯度累积: batch_size={args.batch_size} >= 8，无需梯度累积")
+    
+    if args.gradient_accumulation_steps > 1:
+        effective_batch_size = args.batch_size * args.gradient_accumulation_steps
+        print(f"📊 梯度累积已启用:")
+        print(f"   实际batch_size: {args.batch_size}")
+        print(f"   累积步数: {args.gradient_accumulation_steps}")
+        print(f"   有效batch_size: {effective_batch_size}")
+        print(f"   建议: 这有助于减少小batch带来的梯度噪声")
     
     # 处理通道分组参数
     if args.channel_groups is not None:
@@ -141,16 +373,16 @@ if __name__ == '__main__':
     if args.is_training:
         for ii in range(args.itr):
             # setting record of experiments
-            setting = '{}_{}_{}_sl{}_step{}_gaf{}_fd{}_dtype{}_{}'.format(
-                args.model_id,
-                args.model,
-                args.data,
-                args.seq_len,
-                args.step,
-                args.gaf_method,
-                args.feature_dim,
-                args.data_type_method,
-                args.des, ii)
+            # 构建实验设置字符串
+            setting = f'{args.data}_{args.model}_{args.des}_sl{args.seq_len}_step{args.step}_' \
+                    f'fd{args.feature_dim}_extractor-{args.extractor_type}_gaf-{args.fusion_type}_' \
+                    f'attention-{args.attention_type}_classifier-{args.classifier_type}'
+            
+            if args.use_statistical_features:
+                setting += f'_stat-{args.stat_type}_fusion-{args.multimodal_fusion_strategy}'
+            
+            if args.hvac_groups:
+                setting += '_grouped'
             exp = Exp(args,setting)  # set experiments
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
             exp.train()
@@ -158,23 +390,28 @@ if __name__ == '__main__':
 
             print('>>>>>>>validating : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
             exp.vali()
+            
+            # 每次实验后清理内存
+            MemoryCleaner.full_cleanup()
+            
             if args.gpu_type == 'mps':
                 torch.backends.mps.empty_cache()
             elif args.gpu_type == 'cuda':
                 torch.cuda.empty_cache()
     else:
-        exp = Exp(args)  # set experiments
+        # 构建实验设置字符串
+        setting = f'{args.data}_{args.model}_{args.des}_sl{args.seq_len}_step{args.step}_' \
+                f'fd{args.feature_dim}_extractor-{args.extractor_type}_gaf-{args.fusion_type}_' \
+                f'attention-{args.attention_type}_classifier-{args.classifier_type}'
+        
+        if args.use_statistical_features:
+            setting += f'_stat-{args.stat_type}_fusion-{args.multimodal_fusion_strategy}'
+        
+        if args.hvac_groups:
+            setting += '_grouped'
+        
+        exp = Exp(args, setting)  # set experiments
         ii = 0
-        setting = '{}_{}_{}_sl{}_step{}_gaf{}_fd{}_dtype{}_{}'.format(
-            args.model_id,
-            args.model,
-            args.data,
-            args.seq_len,
-            args.step,
-            args.gaf_method,
-            args.feature_dim,
-            args.data_type_method,
-            args.des, ii)
 
         print('>>>>>>>validating : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
         exp.test(setting, test=1)
@@ -182,3 +419,9 @@ if __name__ == '__main__':
             torch.backends.mps.empty_cache()
         elif args.gpu_type == 'cuda':
             torch.cuda.empty_cache()
+    
+    # 程序结束时的最终清理
+    print("\n=== 程序即将结束 ===")
+    MemoryCleaner.full_cleanup()
+    MemoryCleaner.print_memory_info()
+    print("=== 程序结束 ===\n")

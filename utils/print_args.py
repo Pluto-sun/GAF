@@ -1,8 +1,8 @@
 def print_args(args):
-    print("\033[1m" + "Basic Config" + "\033[0m")
-    print(f'  {"Task Name:":<20}{args.task_name:<20}{"Is Training:":<20}{args.is_training:<20}')
-    print(f'  {"Model ID:":<20}{args.model_id:<20}{"Model:":<20}{args.model:<20}')
-    print()
+    # print("\033[1m" + "Basic Config" + "\033[0m")
+    # print(f'  {"Task Name:":<20}{args.task_name:<20}{"Is Training:":<20}{args.is_training:<20}')
+    # print(f'  {"Model ID:":<20}{args.model_id:<20}{"Model:":<20}{args.model:<20}')
+    # print()
 
     print("\033[1m" + "Data Loader" + "\033[0m")
     print(f'  {"Data:":<20}{args.data:<20}{"Root Path:":<20}{args.root_path:<20}')
