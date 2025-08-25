@@ -146,7 +146,7 @@ def batch_add_working_time_column(
 # 用法示例
 if __name__ == "__main__":
     batch_add_working_time_column(
-        "./dataset/DDAHU/direct_5T",
-        "./dataset/DDAHU/direct_5_working",
+        "./dataset/SAHU/direct_5T",
+        "./dataset/SAHU/direct_5_working",
         remove_start_points=0,
     )

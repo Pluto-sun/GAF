@@ -51,6 +51,7 @@ class DualGAFDataManager:
         self.step = args.step
         self.win_size = args.seq_len
         self.test_size = args.test_size
+        self.rows = args.rows
         
         # 数据类型转换方法选择
         self.data_type_method = getattr(args, 'data_type_method', 'float32')
@@ -61,17 +62,39 @@ class DualGAFDataManager:
         self._parallel_initialized = False
 
         # 文件标签映射
+        # self.file_label_map = {
+        #     "AHU_annual_resampled_direct_5min_working.csv": "AHU_annual",
+        #     "coi_bias_-4_annual_resampled_direct_5min_working.csv": "coi_bias_-4",
+        #     "coi_bias_4_annual_direct_5min_working.csv": "coi_bias_4",
+        #     "oa_bias_-2_annual_direct_5min_working.csv": "oa_bias_-2",
+        #     "coi_leakage_050_annual_direct_5min_working.csv": "coi_leakage_050", 
+        #     "coi_stuck_075_annual_resampled_direct_5min_working.csv": "coi_stuck_075",
+        #     "coi_stuck_025_annual_direct_5min_working.csv": "coi_stuck_025",
+        #     "damper_stuck_075_annual_resampled_direct_5min_working.csv": "damper_stuck_075",
+        #     "damper_stuck_025_annual_direct_5min_working.csv": "damper_stuck_025",
+        # }
         self.file_label_map = {
             "AHU_annual_resampled_direct_5min_working.csv": "AHU_annual",
             "coi_bias_-4_annual_resampled_direct_5min_working.csv": "coi_bias_-4",
             "coi_bias_4_annual_direct_5min_working.csv": "coi_bias_4",
-            "oa_bias_-2_annual_direct_5min_working.csv": "oa_bias_-2",
-            "coi_leakage_050_annual_direct_5min_working.csv": "coi_leakage_050", 
+            "oa_bias_4_annual_direct_5min_working.csv": "oa_bias_4", 
+            "coi_leakage_010_annual_direct_5min_working.csv": "coi_leakage_010",
             "coi_stuck_075_annual_resampled_direct_5min_working.csv": "coi_stuck_075",
             "coi_stuck_025_annual_direct_5min_working.csv": "coi_stuck_025",
             "damper_stuck_075_annual_resampled_direct_5min_working.csv": "damper_stuck_075",
             "damper_stuck_025_annual_direct_5min_working.csv": "damper_stuck_025",
         }
+        # self.file_label_map = {
+        #     "AHU_annual_working.csv": "AHU_annual",
+        #     "coi_bias_-4_annual_working.csv": "coi_bias_-4",
+        #     "coi_bias_4_annual_working.csv": "coi_bias_4",
+        #     "oa_bias_-2_annual_working.csv": "oa_bias_-2",
+        #     "coi_leakage_050_annual_working.csv": "coi_leakage_050", 
+        #     "coi_stuck_075_annual_working.csv": "coi_stuck_075",
+        #     "coi_stuck_025_annual_working.csv": "coi_stuck_025",
+        #     "damper_stuck_075_annual_working.csv": "damper_stuck_075",
+        #     "damper_stuck_025_annual_working.csv": "damper_stuck_025",
+        # }
         # self.file_label_map = {
         #     "AHU_annual_resampled_direct_5min_working.csv": "AHU_annual",
         # }
@@ -203,7 +226,7 @@ class DualGAFDataManager:
             print(f"\n处理文件 {i+1}/{len(self.file_label_map)}: {file_path}")
             print(f"标签值: {label}")
 
-            segments, cols = load_and_segment(file_path, None, True)
+            segments, cols = load_and_segment(file_path, self.rows, True)
 
             if not segments:
                 print(f"警告: 文件 {file_name} 未包含有效数据段")
@@ -255,7 +278,7 @@ class DualGAFDataManager:
 
         # 打乱数据
         print("\n=== 打乱数据 ===")
-        np.random.seed(42)
+        np.random.seed(52)
         indices = np.random.permutation(len(labeled_windows))
         labeled_windows = labeled_windows[indices]
         labeled_labels = labeled_labels[indices]

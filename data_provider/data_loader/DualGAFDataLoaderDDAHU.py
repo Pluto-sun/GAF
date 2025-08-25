@@ -1331,6 +1331,7 @@ class DualGAFDataLoaderDDAHU(Dataset):
 
         # 检查是否使用统计特征
         self.use_statistical_features = getattr(args, "use_statistical_features", True)
+        self.use_signal_level_stats = getattr(args, "use_signal_level_stats", False)
 
         # 根据flag选择对应的数据
         if flag == "train":
@@ -1338,7 +1339,7 @@ class DualGAFDataLoaderDDAHU(Dataset):
             self.difference_data = self.data_manager.train_difference
             self.time_series_data = (
                 self.data_manager.train_time_series
-                if self.use_statistical_features
+                if self.use_statistical_features or self.use_signal_level_stats
                 else None
             )
             self.labels = self.data_manager.train_labels
@@ -1347,7 +1348,7 @@ class DualGAFDataLoaderDDAHU(Dataset):
             self.difference_data = self.data_manager.val_difference
             self.time_series_data = (
                 self.data_manager.val_time_series
-                if self.use_statistical_features
+                if self.use_statistical_features or self.use_signal_level_stats
                 else None
             )
             self.labels = self.data_manager.val_labels
@@ -1358,6 +1359,10 @@ class DualGAFDataLoaderDDAHU(Dataset):
         if self.use_statistical_features:
             print(
                 f"  - 启用统计特征，返回四元组 (summation, difference, time_series, label)"
+            )
+        elif self.use_signal_level_stats:
+            print(
+                f"  - 启用信号级统计特征，返回四元组 (summation, difference, time_series, label)"
             )
         else:
             print(f"  - 禁用统计特征，返回三元组 (summation, difference, label)")
@@ -1386,7 +1391,7 @@ class DualGAFDataLoaderDDAHU(Dataset):
         # 确保标签是标量但在损失计算时能正确处理
         label_tensor = torch.tensor(label, dtype=torch.long)
 
-        if self.use_statistical_features:
+        if self.use_statistical_features or self.use_signal_level_stats:
             # 返回四元组
             time_series_data = self.time_series_data[index]
             time_series_data = torch.from_numpy(time_series_data.astype(np.float32))

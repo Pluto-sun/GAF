@@ -1,0 +1,129 @@
+2025-08-20 20:51:49 | INFO     | ================================================================================
+2025-08-20 20:51:49 | INFO     | 实验日志开始: DualGAF_DDAHU_DualGAFNet_基准版_sl96_step96_fd128_extractor-dilated_gaf-adaptive_attention-channel_classifier-mlp_stat-basic_fusion-concat
+2025-08-20 20:51:49 | INFO     | 日志文件: ./result/0820_2051_DualGAF_DDAHU_DualGAFNet_基准版_sl96_step96_fd128_extractor-dilated_gaf-adaptive_attention-channel_classifier-mlp_stat-basic_fusion-concat/training.log
+2025-08-20 20:51:49 | INFO     | 开始时间: 2025-08-20 20:51:49
+2025-08-20 20:51:49 | INFO     | ================================================================================
+2025-08-20 20:51:49 | INFO     | ⚙️ 实验配置:
+2025-08-20 20:51:49 | INFO     |    task_name: classification
+2025-08-20 20:51:49 | INFO     |    is_training: 1
+2025-08-20 20:51:49 | INFO     |    model_id: test
+2025-08-20 20:51:49 | INFO     |    model: DualGAFNet
+2025-08-20 20:51:49 | INFO     |    data: DualGAF_DDAHU
+2025-08-20 20:51:49 | INFO     |    root_path: ./dataset/DDAHU/direct_5_working
+2025-08-20 20:51:49 | INFO     |    step: 96
+2025-08-20 20:51:49 | INFO     |    checkpoints: ./checkpoints/
+2025-08-20 20:51:49 | INFO     |    num_class: 29
+2025-08-20 20:51:49 | INFO     |    result_path: ./result/
+2025-08-20 20:51:49 | INFO     |    test_size: 0.2
+2025-08-20 20:51:49 | INFO     |    rows: None
+2025-08-20 20:51:49 | INFO     |    seq_len: 96
+2025-08-20 20:51:49 | INFO     |    enc_in: 97
+2025-08-20 20:51:49 | INFO     |    d_model: 512
+2025-08-20 20:51:49 | INFO     |    n_heads: 8
+2025-08-20 20:51:49 | INFO     |    e_layers: 2
+2025-08-20 20:51:49 | INFO     |    d_layers: 1
+2025-08-20 20:51:49 | INFO     |    d_ff: 2048
+2025-08-20 20:51:49 | INFO     |    moving_avg: 25
+2025-08-20 20:51:49 | INFO     |    factor: 1
+2025-08-20 20:51:49 | INFO     |    distil: True
+2025-08-20 20:51:49 | INFO     |    dropout: 0.1
+2025-08-20 20:51:49 | INFO     |    embed: timeF
+2025-08-20 20:51:49 | INFO     |    activation: gelu
+2025-08-20 20:51:49 | INFO     |    use_norm: 1
+2025-08-20 20:51:49 | INFO     |    gaf_method: summation
+2025-08-20 20:51:49 | INFO     |    feature_dim: 128
+2025-08-20 20:51:49 | INFO     |    data_type_method: uint8
+2025-08-20 20:51:49 | INFO     |    use_attention: True
+2025-08-20 20:51:49 | INFO     |    hidden_dim: 64
+2025-08-20 20:51:49 | INFO     |    sample_size: 1000
+2025-08-20 20:51:49 | INFO     |    cnn_dropout_rate: 0.3
+2025-08-20 20:51:49 | INFO     |    cnn_use_batch_norm: True
+2025-08-20 20:51:49 | INFO     |    channel_groups: None
+2025-08-20 20:51:49 | INFO     |    hvac_groups: None
+2025-08-20 20:51:49 | INFO     |    use_channel_compression: False
+2025-08-20 20:51:49 | INFO     |    compression_strategy: signal_compression
+2025-08-20 20:51:49 | INFO     |    compression_ratio: 0.7
+2025-08-20 20:51:49 | INFO     |    compression_channels: None
+2025-08-20 20:51:49 | INFO     |    adaptive_compression_ratios: [0.5, 0.7, 0.8]
+2025-08-20 20:51:49 | INFO     |    hvac_group_compression_ratios: None
+2025-08-20 20:51:49 | INFO     |    extractor_type: dilated
+2025-08-20 20:51:49 | INFO     |    fusion_type: adaptive
+2025-08-20 20:51:49 | INFO     |    attention_type: channel
+2025-08-20 20:51:49 | INFO     |    classifier_type: mlp
+2025-08-20 20:51:49 | INFO     |    use_statistical_features: True
+2025-08-20 20:51:49 | INFO     |    stat_type: basic
+2025-08-20 20:51:49 | INFO     |    multimodal_fusion_strategy: concat
+2025-08-20 20:51:49 | INFO     |    use_signal_level_stats: False
+2025-08-20 20:51:49 | INFO     |    signal_stat_type: comprehensive
+2025-08-20 20:51:49 | INFO     |    signal_stat_fusion_strategy: concat_project
+2025-08-20 20:51:49 | INFO     |    signal_stat_feature_dim: 32
+2025-08-20 20:51:49 | INFO     |    use_diff_branch: True
+2025-08-20 20:51:49 | INFO     |    ablation_mode: none
+2025-08-20 20:51:49 | INFO     |    backbone_type: resnet18
+2025-08-20 20:51:49 | INFO     |    use_sum_branch: True
+2025-08-20 20:51:49 | INFO     |    num_workers: 0
+2025-08-20 20:51:49 | INFO     |    cuda_debug: False
+2025-08-20 20:51:49 | INFO     |    gpu_memory_fraction: 0.9
+2025-08-20 20:51:49 | INFO     |    safe_mode: True
+2025-08-20 20:51:49 | INFO     |    drop_last_batch: True
+2025-08-20 20:51:49 | INFO     |    itr: 1
+2025-08-20 20:51:49 | INFO     |    train_epochs: 300
+2025-08-20 20:51:49 | INFO     |    batch_size: 4
+2025-08-20 20:51:49 | INFO     |    patience: 15
+2025-08-20 20:51:49 | INFO     |    learning_rate: 0.0001
+2025-08-20 20:51:49 | INFO     |    des: 基准版
+2025-08-20 20:51:49 | INFO     |    loss: MSE
+2025-08-20 20:51:49 | INFO     |    lradj: type1
+2025-08-20 20:51:49 | INFO     |    lr_scheduler_type: f1_based
+2025-08-20 20:51:49 | INFO     |    lr_loss_weight: 0.3
+2025-08-20 20:51:49 | INFO     |    lr_f1_weight: 0.7
+2025-08-20 20:51:49 | INFO     |    use_amp: False
+2025-08-20 20:51:49 | INFO     |    gradient_accumulation_steps: 2
+2025-08-20 20:51:49 | INFO     |    enable_auto_gradient_accumulation: True
+2025-08-20 20:51:49 | INFO     |    loss_type: ce
+2025-08-20 20:51:49 | INFO     |    label_smoothing: 0.1
+2025-08-20 20:51:49 | INFO     |    focal_alpha: 1.0
+2025-08-20 20:51:49 | INFO     |    focal_gamma: 2.0
+2025-08-20 20:51:49 | INFO     |    confidence_penalty_beta: 0.1
+2025-08-20 20:51:49 | INFO     |    use_timm_loss: True
+2025-08-20 20:51:49 | INFO     |    adaptive_initial_smoothing: 0.2
+2025-08-20 20:51:49 | INFO     |    adaptive_final_smoothing: 0.05
+2025-08-20 20:51:49 | INFO     |    adaptive_decay_epochs: 30
+2025-08-20 20:51:49 | INFO     |    enable_class_weights: False
+2025-08-20 20:51:49 | INFO     |    class_weights: None
+2025-08-20 20:51:49 | INFO     |    loss_preset: None
+2025-08-20 20:51:49 | INFO     |    n_jobs: 1
+2025-08-20 20:51:49 | INFO     |    use_multiprocessing: False
+2025-08-20 20:51:49 | INFO     |    chunk_size: 800
+2025-08-20 20:51:49 | INFO     |    disable_parallel: True
+2025-08-20 20:51:49 | INFO     |    use_shared_memory: False
+2025-08-20 20:51:49 | INFO     |    disable_shared_memory: False
+2025-08-20 20:51:49 | INFO     |    use_gpu: True
+2025-08-20 20:51:49 | INFO     |    gpu: 0
+2025-08-20 20:51:49 | INFO     |    gpu_type: cuda
+2025-08-20 20:51:49 | INFO     |    use_multi_gpu: False
+2025-08-20 20:51:49 | INFO     |    devices: 0,1,2,3
+2025-08-20 20:51:49 | INFO     |    device: cuda:0
+2025-08-20 20:51:49 | INFO     |    feature_columns: ['CHWP_GPMC', 'CHWC_VLV_DM', 'CHWC_VLV', 'CHWC_MWT', 'CHWC_LWT', 'VAVCFM_H_DM_SB', 'CHWC_EAH', 'VAV_DAT_SA', 'CHWC_DAT', 'VAV_SP_C_SA', 'HWP_GPMT', 'VAVCFM_C_DM_SB', 'RM_TEMP_W', 'HWP_GPMC', 'VAVCFM_T_SB', 'VAV_DMPR_H_SB', 'HWC_VLV_DM', 'VAVCFM_H_SB', 'HWC_VLV', 'VAV_DMPR_H_E', 'HWC_LWT', 'HWC_MWT', 'VAV_DMPR_C_SB', 'HWC_DAT', 'RM_TEMP_SB', 'CSF_WAT', 'CSF_SPD', 'CSF_DP', 'CSA_TEMP', 'CSA_CFM', 'VAV_EAT_C_SB', 'CSA_HUMD', 'CSA_SP', 'VAVCFM_C_SB', 'VAVCFM_H_W', 'HSF_SPD', 'VAV_EAT_H_SB', 'VAV_DAT_SB', 'RM_TEMP_SA', 'HSF_DP', 'HSA_TEMP', 'VAVCFM_C_DM_W', 'VAVCFM_C_W', 'VAV_DAT_W', 'HSA_SP', 'HSA_CFM', 'VAV_DMPR_H_W', 'HSF_WAT', 'VAVCFM_T_W', 'EA_DMPR_DM', 'RF_WAT', 'VAV_SP_C_W', 'VAV_SP_H_E', 'EA_DMPR', 'VAV_SP_H_SB', 'RF_SPD', 'RA_TEMP', 'RA_HUMD', 'VAV_SP_H_SA', 'VAV_EAT_H_W', 'RF_DP', 'VAV_DMPR_C_SA', 'VAV_SP_C_SB', 'RA_DMPR_DM', 'VAV_DMPR_H_SA', 'VAV_SP_H_W', 'VAVCFM_H_DM_SA', 'RA_DMPR', 'VAV_EAT_C_W', 'VAVCFM_C_DM_SA', 'RA_CFM', 'MA_TEMP', 'VAVCFM_C_SA', 'OA_TEMP', 'VAVCFM_H_SA', 'VAVCFM_H_DM_W', 'OA_HUMD', 'VAVCFM_T_SA', 'OA_DMPR_DM', 'VAV_EAT_C_SA', 'VAV_DMPR_C_W', 'OA_DMPR', 'VAV_EAT_H_SA', 'HSA_HUMD', 'RM_TEMP_E', 'VAV_EAT_H_E', 'VAV_DAT_E', 'VAV_EAT_C_E', 'VAVCFM_T_E', 'VAVCFM_H_E', 'VAV_SP_C_E', 'VAVCFM_C_DM_E', 'OA_CFM', 'VAV_DMPR_C_E', 'VAVCFM_C_E', 'VAVCFM_H_DM_E', 'CHWP_GPMT']
+2025-08-20 20:51:49 | INFO     | 🏗️ 模型信息:
+2025-08-20 20:51:49 | INFO     |    模型类型: Model
+2025-08-20 20:51:49 | INFO     |    总参数数量: 26,996,130
+2025-08-20 20:51:49 | INFO     |    可训练参数: 26,996,130
+2025-08-20 20:51:49 | INFO     |    模型大小估计: 102.98 MB
+2025-08-20 20:51:49 | INFO     | 📊 数据集信息:
+2025-08-20 20:51:49 | INFO     |    训练集大小: 5967
+2025-08-20 20:51:49 | INFO     |    验证集大小: 1492
+2025-08-20 20:51:49 | INFO     | 
+================================================================================
+2025-08-20 20:51:49 | INFO     | 📋 损失函数使用策略（遵循主流机器学习规范）:
+2025-08-20 20:51:49 | INFO     |    🎯 训练阶段: 使用 ce 损失函数
+2025-08-20 20:51:49 | INFO     |       → 目的：优化模型参数，解决特定问题（类别不平衡、相似性等）
+2025-08-20 20:51:49 | INFO     |    📊 验证阶段: 使用标准交叉熵损失函数
+2025-08-20 20:51:49 | INFO     |       → 目的：客观评估模型性能，便于不同方法比较
+2025-08-20 20:51:49 | INFO     |    📈 最终报告: 基于标准交叉熵损失的指标
+2025-08-20 20:51:49 | INFO     |       → 目的：提供可信、可比较的性能指标
+2025-08-20 20:51:49 | INFO     | ================================================================================
+
+2025-08-20 20:51:49 | INFO     | 🔄 梯度累积配置: 每2轮累积一次梯度
+2025-08-20 20:51:49 | INFO     |    实际batch_size: 4
+2025-08-20 20:51:49 | INFO     |    有效batch_size: 8

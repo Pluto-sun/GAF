@@ -14,28 +14,64 @@ import numpy as np
 import pandas as pd
 
 class RawFeatureWindowLoader(Dataset):
-    def __init__(self, args, flag):
+    def __init__(self, args, flag, max_samples=None):
         """
         读取原始csv，按文件标签映射，滑动窗口切分，归一化，输出原始特征窗口和标签。
         flag: 'train' 或 'val'，用于切分数据集
+        max_samples: 限制总样本数，None为全量
         """
         self.args = args
         self.root_path = args.root_path
-        self.win_size = args.seq_len
+        self.win_size = args.win_size
         self.step = args.step
         self.flag = flag
         self.val_ratio = args.val_ratio
-        self.seed = args.seed
+        self.seed = 42
+        self.max_samples = max_samples
 
         # 使用有意义的字符串标签而不是数字
+        # self.file_label_map = {
+        #     "AHU_annual_resampled_direct_5min_working.csv": "AHU_annual",
+        #     "coi_bias_-4_annual_resampled_direct_5min_working.csv": "coi_bias_-4",
+        #     "coi_bias_4_annual_direct_5min_working.csv": "coi_bias_4",
+        #     "oa_bias_4_annual_direct_5min_working.csv": "oa_bias_4", 
+        #     "coi_leakage_010_annual_direct_5min_working.csv": "coi_leakage_010",
+        #     "coi_stuck_075_annual_resampled_direct_5min_working.csv": "coi_stuck_075",
+        #     "coi_stuck_025_annual_direct_5min_working.csv": "coi_stuck_025",
+        #     "damper_stuck_075_annual_resampled_direct_5min_working.csv": "damper_stuck_075",
+        #     "damper_stuck_025_annual_direct_5min_working.csv": "damper_stuck_025",
+        # }
         self.file_label_map = {
-            "AHU_annual_resampled_direct_5T_working.csv": "正常状态",
-            "coi_stuck_025_resampled_direct_5T_working.csv": "冷却盘管卡死异常",
-            "damper_stuck_025_annual_resampled_direct_5T_working.csv": "风阀卡死异常",
-            "coi_leakage_050_annual_resampled_direct_5T_working.csv": "冷却盘管泄漏异常",
-            "oa_bias_-4_annual_resampled_direct_5T_working.csv": "新风偏置异常",
+            "DualDuct_DMPRStuck_Cold_0_direct_5min_working.csv": "DMPRStuck_Cold_0",
+            "DualDuct_DMPRStuck_Cold_50_direct_5min_working.csv": "DMPRStuck_Cold_50",
+            "DualDuct_DMPRStuck_Cold_100_direct_5min_working.csv": "DMPRStuck_Cold_100",
+            "DualDuct_DMPRStuck_Hot_0_direct_5min_working.csv": "DMPRStuck_Hot_0",
+            "DualDuct_DMPRStuck_Hot_50_direct_5min_working.csv": "DMPRStuck_Hot_50",
+            "DualDuct_DMPRStuck_Hot_100_direct_5min_working.csv": "DMPRStuck_Hot_100",
+            "DualDuct_DMPRStuck_OA_0_direct_5min_working.csv": "DMPRStuck_OA_0",
+            "DualDuct_DMPRStuck_OA_45_direct_5min_working.csv": "DMPRStuck_OA_45",
+            "DualDuct_DMPRStuck_OA_100_direct_5min_working.csv": "DMPRStuck_OA_100",
+            "DualDuct_Fouling_Cooling_Airside_Moderate_direct_5min_working.csv": "Fouling_Cooling_Airside_Moderate",
+            "DualDuct_Fouling_Cooling_Airside_Severe_direct_5min_working.csv": "Fouling_Cooling_Airside_Severe",
+            "DualDuct_Fouling_Cooling_Waterside_Moderate_direct_5min_working.csv": "Fouling_Cooling_Waterside_Moderate",
+            "DualDuct_Fouling_Cooling_Waterside_Severe_direct_5min_working.csv": "Fouling_Cooling_Waterside_Severe",
+            "DualDuct_Fouling_Heating_Airside_Moderate_direct_5min_working.csv": "Fouling_Heating_Airside_Moderate",
+            "DualDuct_Fouling_Heating_Airside_Severe_direct_5min_working.csv": "Fouling_Heating_Airside_Severe",
+            "DualDuct_Fouling_Heating_Waterside_Moderate_direct_5min_working.csv": "Fouling_Heating_Waterside_Moderate",
+            "DualDuct_Fouling_Heating_Waterside_Severe_direct_5min_working.csv": "Fouling_Heating_Waterside_Severe",
+            "DualDuct_VLVStuck_Cooling_0__direct_5min_working.csv": "VLVStuck_Cooling_0",
+            "DualDuct_VLVStuck_Cooling_50__direct_5min_working.csv": "VLVStuck_Cooling_50",
+            "DualDuct_VLVStuck_Cooling_100__direct_5min_working.csv": "VLVStuck_Cooling_100",
+            "DualDuct_VLVStuck_Heating_0__direct_5min_working.csv": "VLVStuck_Heating_0",
+            "DualDuct_VLVStuck_Heating_50__direct_5min_working.csv": "VLVStuck_Heating_50",
+            "DualDuct_VLVStuck_Heating_100__direct_5min_working.csv": "VLVStuck_Heating_100",
+            "DualDuct_SensorBias_CSA_+4C_direct_5min_working.csv": "SensorBias_CSA_+4C",
+            "DualDuct_SensorBias_CSP_+4inwg_direct_5min_working.csv": "SensorBias_CSP_+4inwg",
+            "DualDuct_SensorBias_HSA_+4C_direct_5min_working.csv": "SensorBias_HSA_+4C",
+            "DualDuct_SensorBias_HSP_+4inwg_direct_5min_working.csv": "SensorBias_HSP_+4inwg",
+            "DualDuct_HeatSeqUnstable_direct_5min_working.csv": "HeatSeqUnstable",
+            "DualDuct_CoolSeqUnstable_direct_5min_working.csv": "CoolSeqUnstable",
         }
-        
         # 创建标签映射：字符串标签 -> 数字索引
         unique_labels = sorted(set(self.file_label_map.values()))
         self.label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
@@ -43,8 +79,8 @@ class RawFeatureWindowLoader(Dataset):
 
         self.scalers = {}
         self.feature_columns = None
-        self.labeled_windows = None
-        self.labeled_labels = None
+        self.labeled_windows = np.empty((0,))
+        self.labeled_labels = np.empty((0,))
         self._load_or_process()
         self._split_data()
 
@@ -68,12 +104,18 @@ class RawFeatureWindowLoader(Dataset):
             ]
             feature_columns = [col for col in df.columns if col not in exclude_columns]
             features = df[feature_columns]
-            all_segments.append(features.values)
+            all_segments.append(np.array(features))
             # 转换字符串标签为数字索引
             numeric_label = self.label_to_idx[label]
             all_labels.append(np.full(len(features), numeric_label))
         X = np.concatenate(all_segments, axis=0)  # [总样本数, 通道数]
         y = np.concatenate(all_labels, axis=0)
+        # 限制样本数
+        if self.max_samples is not None and len(X) > self.max_samples:
+            np.random.seed(self.seed)
+            indices = np.random.permutation(len(X))[:self.max_samples]
+            X = X[indices]
+            y = y[indices]
         # 归一化
         self.scalers = {}
         for i, col in enumerate(X.T):
@@ -95,17 +137,17 @@ class RawFeatureWindowLoader(Dataset):
         self.labeled_labels = y
         self.feature_columns = list(range(X.shape[1]))
         # 持久化
-        if self.persist_path:
-            with open(self.persist_path, "wb") as f:
-                pickle.dump(
-                    {
-                        "labeled_windows": self.labeled_windows,
-                        "labeled_labels": self.labeled_labels,
-                        "scalers": self.scalers,
-                        "feature_columns": self.feature_columns,
-                    },
-                    f,
-                )
+        # if self.persist_path:
+        #     with open(self.persist_path, "wb") as f:
+        #         pickle.dump(
+        #             {
+        #                 "labeled_windows": self.labeled_windows,
+        #                 "labeled_labels": self.labeled_labels,
+        #                 "scalers": self.scalers,
+        #                 "feature_columns": self.feature_columns,
+        #             },
+        #             f,
+        #         )
 
     def _split_data(self):
         np.random.seed(self.seed)

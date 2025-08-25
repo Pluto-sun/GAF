@@ -25,8 +25,8 @@ signal.signal(signal.SIGTERM, cleanup_handler)  # 终止信号
 if __name__ == '__main__':
     # 程序开始时检查和清理内存
     print("=== 程序启动 ===")
-    MemoryCleaner.print_memory_info()
-    MemoryCleaner.full_cleanup()
+    # MemoryCleaner.print_memory_info()
+    # MemoryCleaner.full_cleanup()
     
     fix_seed = 2021
     random.seed(fix_seed)
@@ -51,6 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_class', type=int, default=2, help='number of classes for classification')
     parser.add_argument('--result_path', type=str, default='./result/', help='result path')
     parser.add_argument('--test_size', type=float, default=0.2, help='test size')
+    parser.add_argument('--rows', type=int, default=None, help='roll size')
     # model define
     parser.add_argument('--seq_len', type=int, default=64, help='input sequence length')
     parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
@@ -77,12 +78,24 @@ if __name__ == '__main__':
     parser.add_argument('--use_attention', type=bool, default=True, help='use attention')
     parser.add_argument('--hidden_dim', type=int, default=64, help='hidden dimension')
     parser.add_argument('--sample_size', type=int, default=1000, help='sample size')
+    
+    # 1D-CNN参数
+    parser.add_argument('--cnn_dropout_rate', type=float, default=0.3, 
+                        help='Dropout rate for 1D-CNN model')
+    parser.add_argument('--cnn_use_batch_norm', type=bool, default=True, 
+                        help='Whether to use BatchNorm in 1D-CNN model')
     # 添加通道分组参数
     parser.add_argument('--channel_groups', type=str, default=None,
                         help='Channel grouping for ClusteredResNet. Format: "0,1,2|3,4,5|6,7,8"')
     parser.add_argument('--hvac_groups', type=str, default=None,
                         help='HVAC signal grouping for MultiImageFeatureNet. Format: "SA_TEMP,OA_TEMP|OA_CFM,RA_CFM|SA_SP"')
-    
+    # 通道压缩参数
+    parser.add_argument('--use_channel_compression', action='store_true', default=False, help='use channel compression')
+    parser.add_argument('--compression_strategy', type=str, default='signal_compression', help='compression strategy')
+    parser.add_argument('--compression_ratio', type=float, default=0.7, help='compression ratio')
+    parser.add_argument('--compression_channels', type=int, default=None, help='compression channels')
+    parser.add_argument('--adaptive_compression_ratios', type=list, default=[0.5, 0.7, 0.8], help='adaptive compression ratios')
+    parser.add_argument('--hvac_group_compression_ratios', type=list, default=None, help='hvac group compression ratios')
     # 双路网络模块配置参数
     parser.add_argument('--extractor_type', type=str, default='large_kernel',
                         help='Feature extractor type for DualGAFNet. Options: [large_kernel, inception, dilated, multiscale]')
@@ -98,7 +111,18 @@ if __name__ == '__main__':
     parser.add_argument('--stat_type', type=str, default='comprehensive',
                        choices=['basic', 'comprehensive', 'correlation_focused'], help='统计特征类型')
     parser.add_argument('--multimodal_fusion_strategy', type=str, default='concat',
-                       choices=['concat', 'attention', 'gated', 'adaptive'], help='多模态融合策略')
+                       choices=['concat', 'attention', 'gated', 'adaptive','film'], help='多模态融合策略')
+
+    # 信号级统计特征配置（新增）
+    parser.add_argument('--use_signal_level_stats', action='store_true', default=False, 
+                       help='是否使用信号级统计特征（对比实验，替代全局统计特征）')
+    parser.add_argument('--signal_stat_type', type=str, default='comprehensive',
+                       choices=['basic', 'comprehensive', 'extended'], help='信号级统计特征类型')
+    parser.add_argument('--signal_stat_fusion_strategy', type=str, default='concat_project',
+                       choices=['concat_project', 'attention_fusion', 'gated_fusion', 'residual_fusion', 'cross_attention', 'adaptive_fusion'],
+                       help='信号级统计特征融合策略')
+    parser.add_argument('--signal_stat_feature_dim', type=int, default=32,
+                       help='信号级统计特征维度')
 
     # 消融实验配置参数
     parser.add_argument('--use_diff_branch', action='store_true', default=True,
@@ -106,17 +130,41 @@ if __name__ == '__main__':
     parser.add_argument('--ablation_mode', type=str, default='none',
                        choices=['none', 'no_diff', 'no_stat', 'no_attention', 'minimal'],
                        help='消融实验模式快捷设置: none(完整模型), no_diff(无差分分支), no_stat(无统计特征), no_attention(无注意力), minimal(最简模型)')
+    
+    # SimpleGAFNet特有参数（用于消融实验）
+    parser.add_argument('--backbone_type', type=str, default='resnet18',
+                       choices=['simple_cnn', 'resnet18', 'resnet34', 'resnet50', 'inception'],
+                       help='SimpleGAFNet的主干架构类型: simple_cnn(轻量级), resnet18(推荐), resnet34(深层), resnet50(实验性), inception(多尺度)')
+    parser.add_argument('--use_sum_branch', action='store_true', default=True,
+                       help='SimpleGAFNet选择GAF分支: True(使用summation GAF), False(使用difference GAF)')
 
     # optimization
-    parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
+    parser.add_argument('--num_workers', type=int, default=0, help='data loader num workers')
+    parser.add_argument('--cuda_debug', action='store_true', default=False,
+                        help='启用CUDA调试模式（用于诊断CUDA错误）')
+    parser.add_argument('--gpu_memory_fraction', type=float, default=0.9,
+                        help='GPU内存使用比例限制 (0.7-0.95)')
+    parser.add_argument('--safe_mode', action='store_true', default=False,
+                        help='安全模式：启用所有内存优化和错误处理')
+    parser.add_argument('--drop_last_batch', action='store_true', default=True, 
+                        help='丢弃最后一个不完整的batch（避免BatchNorm错误）')
     parser.add_argument('--itr', type=int, default=1, help='experiments times')
     parser.add_argument('--train_epochs', type=int, default=10, help='train epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size of train input data')
-    parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
+    parser.add_argument('--patience', type=int, default=15, help='early stopping patience')
     parser.add_argument('--learning_rate', type=float, default=0.0001, help='optimizer learning rate')
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
+    
+    # 学习率调度器配置（基于F1分数的改进方案）
+    parser.add_argument('--lr_scheduler_type', type=str, default='f1_based',
+                        choices=['f1_based', 'loss_based', 'composite_f1_priority', 'composite_weighted'],
+                        help='学习率调度器类型: f1_based(基于F1分数，推荐), loss_based(基于损失), composite_f1_priority(F1优先复合), composite_weighted(加权复合)')
+    parser.add_argument('--lr_loss_weight', type=float, default=0.3,
+                        help='复合调度器中损失权重 (仅composite_weighted时使用)')
+    parser.add_argument('--lr_f1_weight', type=float, default=0.7,
+                        help='复合调度器中F1权重 (仅composite_weighted时使用)')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
     
     # 梯度累积优化（针对小batch训练）
@@ -170,11 +218,11 @@ if __name__ == '__main__':
     # parallel processing optimization (并行处理优化)
     parser.add_argument('--n_jobs', type=int, default=16, 
                         help='Number of parallel jobs for data processing. -1 means auto-detect (min(cpu_count, 8))')
-    parser.add_argument('--use_multiprocessing', action='store_true', default=True,
+    parser.add_argument('--use_multiprocessing', action='store_true', default=False,
                         help='Enable multiprocessing for GAF generation and data conversion')
     parser.add_argument('--chunk_size', type=int, default=800,
                         help='Chunk size for parallel processing. Larger values use more memory but reduce overhead')
-    parser.add_argument('--disable_parallel', action='store_true', default=False,
+    parser.add_argument('--disable_parallel', action='store_true', default=True,
                         help='Disable all parallel processing optimizations (useful for debugging)')
     parser.add_argument('--use_shared_memory', action='store_true', default=True,
                         help='Enable shared memory optimization for faster inter-process communication')
@@ -213,44 +261,123 @@ if __name__ == '__main__':
         elif sys.version_info < (3, 8):
             args.use_shared_memory = False
             print("⚠️ Python版本过低，禁用共享内存优化 (需要Python 3.8+)")
+    
+    # 🔧 CUDA调试和GPU内存管理配置
+    if args.cuda_debug or args.safe_mode:
+        print("\n🔧 启用CUDA调试和安全模式配置...")
+        import os
         
-        # 根据系统资源调整参数
-        available_memory_gb = None
-        try:
-            import psutil
-            available_memory_gb = psutil.virtual_memory().available / (1024**3)
-        except ImportError:
-            print("⚠️ psutil未安装，无法自动检测内存大小")
+        # 设置CUDA调试环境变量
+        if args.cuda_debug:
+            os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+            print("✅ 已启用CUDA_LAUNCH_BLOCKING=1 (同步执行，便于调试)")
         
-        # 根据内存大小调整chunk_size - 针对高端服务器优化
-        if available_memory_gb is not None:
-            cpu_cores = mp.cpu_count()
+        # GPU内存优化
+        if torch.cuda.is_available():
+            current_device = torch.cuda.current_device()
+            total_memory = torch.cuda.get_device_properties(current_device).total_memory
+            total_memory_gb = total_memory / (1024**3)
             
-            if available_memory_gb < 8:  # 小内存系统
-                args.chunk_size = min(args.chunk_size, 50)
-                args.n_jobs = min(args.n_jobs, 2)
-                print(f"💾 检测到小内存系统 ({available_memory_gb:.1f}GB)，调整参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
-            elif available_memory_gb < 32:  # 中等内存系统
-                args.chunk_size = max(args.chunk_size, 200)
-                args.n_jobs = min(args.n_jobs, 8)
-                print(f"💾 检测到中等内存系统 ({available_memory_gb:.1f}GB)，调整参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
-            elif available_memory_gb < 64:  # 大内存系统
-                args.chunk_size = max(args.chunk_size, 400)
-                args.n_jobs = min(args.n_jobs, 16)
-                print(f"💾 检测到大内存系统 ({available_memory_gb:.1f}GB)，优化参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
-            else:  # 超大内存服务器 (您的配置)
-                # 针对32核128GB的高端配置
-                if cpu_cores >= 32:
-                    # 使用适中的进程数，避免过度并行
-                    args.n_jobs = min(args.n_jobs, 20)  # 留出一些核心给系统
-                    args.chunk_size = max(args.chunk_size, 800)  # 大块大小减少开销
-                    print(f"🚀 检测到高端服务器 ({available_memory_gb:.1f}GB, {cpu_cores}核)，高性能配置：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
-                else:
-                    args.chunk_size = max(args.chunk_size, 600)
-                    print(f"💾 检测到超大内存系统 ({available_memory_gb:.1f}GB)，优化参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+            print(f"🎯 GPU信息: {torch.cuda.get_device_name(current_device)}")
+            print(f"📊 总显存: {total_memory_gb:.2f} GB")
+            
+            # 设置内存分配策略
+            if args.safe_mode:
+                # 启用内存池复用和预分配
+                os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
+                print("✅ 已启用CUDA内存优化策略")
+                
+                # 限制GPU内存使用
+                if hasattr(torch.cuda, 'set_memory_fraction'):
+                    torch.cuda.set_memory_fraction(args.gpu_memory_fraction)
+                    print(f"✅ GPU内存限制: {args.gpu_memory_fraction*100:.0f}%")
+                
+            # 清理初始GPU内存
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, 'ipc_collect'):
+                torch.cuda.ipc_collect()
+            
+            # 显示当前内存使用情况
+            allocated = torch.cuda.memory_allocated(current_device) / (1024**3)
+            reserved = torch.cuda.memory_reserved(current_device) / (1024**3)
+            print(f"📈 当前GPU内存使用: {allocated:.3f} GB (已分配) / {reserved:.3f} GB (已保留)")
+            
+        else:
+            print("⚠️ CUDA不可用，跳过GPU配置")
+    
+    # 🔧 安全模式额外优化
+    if args.safe_mode:
+        print("\n🛡️ 安全模式：启用额外的稳定性优化...")
         
-        shared_memory_status = "启用" if args.use_shared_memory else "禁用"
-        print(f"🚀 并行处理配置 - 进程数: {args.n_jobs}, 多进程: {args.use_multiprocessing}, 块大小: {args.chunk_size}, 共享内存: {shared_memory_status}")
+        # 自动调整batch_size以适应内存限制
+        if torch.cuda.is_available():
+            total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            if total_memory_gb < 6:  # 小显存GPU
+                if args.batch_size > 16:
+                    original_batch_size = args.batch_size
+                    args.batch_size = 16
+                    print(f"🔧 小显存设备，批次大小调整: {original_batch_size} → {args.batch_size}")
+            elif total_memory_gb < 8:  # 中等显存GPU
+                if args.batch_size > 32:
+                    original_batch_size = args.batch_size
+                    args.batch_size = 32
+                    print(f"🔧 中等显存设备，批次大小调整: {original_batch_size} → {args.batch_size}")
+        
+        # 强制启用梯度检查点（如果支持）
+        print("✅ 安全模式优化已启用")
+    
+    print(f"\n📊 最终配置:")
+    print(f"   CUDA调试: {'启用' if args.cuda_debug else '禁用'}")
+    print(f"   安全模式: {'启用' if args.safe_mode else '禁用'}")
+    print(f"   GPU内存限制: {args.gpu_memory_fraction*100:.0f}%")
+    print(f"   批次大小: {args.batch_size}")
+    print(f"   Worker数量: {args.num_workers}")
+    
+    # 根据系统资源调整参数
+    available_memory_gb = None
+    try:
+        import psutil
+        available_memory_gb = psutil.virtual_memory().available / (1024**3)
+    except ImportError:
+        print("⚠️ psutil未安装，无法自动检测内存大小")
+    
+    # 根据内存大小调整chunk_size - 针对高端服务器优化
+    if available_memory_gb is not None:
+        cpu_cores = mp.cpu_count()
+        
+        if available_memory_gb < 8:  # 小内存系统
+            args.chunk_size = min(args.chunk_size, 50)
+            args.n_jobs = min(args.n_jobs, 2)
+            print(f"💾 检测到小内存系统 ({available_memory_gb:.1f}GB)，调整参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+        elif available_memory_gb < 32:  # 中等内存系统
+            args.chunk_size = max(args.chunk_size, 200)
+            args.n_jobs = min(args.n_jobs, 8)
+            print(f"💾 检测到中等内存系统 ({available_memory_gb:.1f}GB)，调整参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+        elif available_memory_gb < 64:  # 大内存系统
+            args.chunk_size = max(args.chunk_size, 400)
+            args.n_jobs = min(args.n_jobs, 16)
+            print(f"💾 检测到大内存系统 ({available_memory_gb:.1f}GB)，优化参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+        else:  # 超大内存服务器 (您的配置)
+            # 针对32核128GB的高端配置
+            if cpu_cores >= 32:
+                # 使用适中的进程数，避免过度并行
+                args.n_jobs = min(args.n_jobs, 20)  # 留出一些核心给系统
+                args.chunk_size = max(args.chunk_size, 800)  # 大块大小减少开销
+                print(f"🚀 检测到高端服务器 ({available_memory_gb:.1f}GB, {cpu_cores}核)，高性能配置：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+            else:
+                args.chunk_size = max(args.chunk_size, 600)
+                print(f"💾 检测到超大内存系统 ({available_memory_gb:.1f}GB)，优化参数：chunk_size={args.chunk_size}, n_jobs={args.n_jobs}")
+    
+    shared_memory_status = "启用" if args.use_shared_memory else "禁用"
+    print(f"🚀 并行处理配置 - 进程数: {args.n_jobs}, 多进程: {args.use_multiprocessing}, 块大小: {args.chunk_size}, 共享内存: {shared_memory_status}")
+    
+    # 处理BatchNorm友好配置
+    print(f"📊 DataLoader配置: num_workers={args.num_workers}, batch_size={args.batch_size}")
+    if args.drop_last_batch:
+        print(f"🔧 已启用drop_last_batch=True，将丢弃不完整的最后一个batch（避免BatchNorm在batch_size=1时出错）")
+    else:
+        print(f"⚠️ drop_last_batch=False，可能在最后一个batch时遇到BatchNorm错误")
+        print(f"💡 提示：如果遇到BatchNorm错误，建议设置 --drop_last_batch")
     
     # 处理消融实验模式（在其他参数处理之前）
     if args.ablation_mode != 'none':
@@ -381,8 +508,14 @@ if __name__ == '__main__':
             if args.use_statistical_features:
                 setting += f'_stat-{args.stat_type}_fusion-{args.multimodal_fusion_strategy}'
             
+            if args.ablation_mode != 'none':
+                setting += f'_ablation-{args.ablation_mode}'
+            if args.use_signal_level_stats:
+                setting += f'_sl-{args.signal_stat_type}_fusion-{args.signal_stat_fusion_strategy}'
             if args.hvac_groups:
                 setting += '_grouped'
+            if args.use_channel_compression:
+                setting += f'_compression-{args.compression_strategy}_ratio-{args.compression_ratio}'
             exp = Exp(args,setting)  # set experiments
             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
             exp.train()
@@ -392,7 +525,7 @@ if __name__ == '__main__':
             exp.vali()
             
             # 每次实验后清理内存
-            MemoryCleaner.full_cleanup()
+            # MemoryCleaner.full_cleanup()
             
             if args.gpu_type == 'mps':
                 torch.backends.mps.empty_cache()
@@ -407,6 +540,10 @@ if __name__ == '__main__':
         if args.use_statistical_features:
             setting += f'_stat-{args.stat_type}_fusion-{args.multimodal_fusion_strategy}'
         
+        if args.ablation_mode != 'none':
+            setting += f'_ablation-{args.ablation_mode}'
+        if args.use_signal_level_stats:
+            setting += f'_sl-{args.signal_stat_type}_fusion-{args.signal_stat_fusion_strategy}'
         if args.hvac_groups:
             setting += '_grouped'
         
@@ -421,7 +558,7 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
     
     # 程序结束时的最终清理
-    print("\n=== 程序即将结束 ===")
-    MemoryCleaner.full_cleanup()
-    MemoryCleaner.print_memory_info()
+    # print("\n=== 程序即将结束 ===")
+    # MemoryCleaner.full_cleanup()
+    # MemoryCleaner.print_memory_info()
     print("=== 程序结束 ===\n")

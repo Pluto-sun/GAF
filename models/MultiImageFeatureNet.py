@@ -134,36 +134,63 @@ class LargeKernelDilatedFeatureExtractor(nn.Module):
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True)
         )
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(128, feature_dim)
+
+        # 保留两种池化
+        self.avgpool = nn.AdaptiveAvgPool2d(1)  # GAP
+        self.maxpool = nn.AdaptiveMaxPool2d(1)  # GMP
+
+        # 将 128*2 映射回 feature_dim
+        # self.fc = nn.Sequential(
+        #     nn.Linear(128 * 2, feature_dim),
+        #     nn.ReLU(inplace=True),
+        #     nn.Dropout(0.1)
+        # )
+        self.fc = nn.Sequential(
+            nn.Linear(128, feature_dim),
+            # nn.ReLU(inplace=True),
+            # nn.Dropout(0.1)
+        )
 
     def forward(self, x):
         # x: [N, 1, H, W]
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        x = self.conv1(x) # [N, 32, H/2, W/2]
+        x = self.conv2(x) # [N, 64, H/4, W/4]
+        x = self.conv3(x) # [N, 128, H/8, W/8]
+        # avg_feat = self.avgpool(x)  # [N, 128, 1, 1]
+        # max_feat = self.maxpool(x)  # [N, 128, 1, 1]
+
+        # # 拼接并展平
+        # fused_pool = torch.cat([avg_feat, max_feat], dim=1)  # [N, 256, 1, 1]
+        # fused_pool = fused_pool.view(fused_pool.size(0), -1)  # [N, 256]
+
+        # # 投影回目标维度
+        # x = self.fc(fused_pool)  # [N, feature_dim]
+        avg_feat = self.avgpool(x)
+        avg_feat = avg_feat.view(avg_feat.size(0), -1)
+        x = self.fc(avg_feat)
+
         return x
 
 class NoPaddingLargeKernelFeatureExtractor(nn.Module):
     def __init__(self, feature_dim=128):
         super().__init__()
+        # conv1: 输入96x96，padding=2, kernel=6, stride=1, pool=2 -> 96x96->96x96->48x48
         self.conv1 = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=6, stride=1, padding=0),
+            nn.Conv2d(1, 32, kernel_size=6, stride=1, padding=2),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
         self.SK_1 = SKAttention(channel=32, kernels=[1,3,5], reduction=8)
+        # conv2: 输入48x48，padding=2, kernel=6, stride=1, pool=2 -> 48x48->48x48->24x24
         self.conv2 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=6, stride=1, padding=0),
+            nn.Conv2d(32, 64, kernel_size=6, stride=1, padding=2),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
         self.SK_2 = SKAttention(channel=64, kernels=[1,3,5], reduction=8)
+        # conv3: 输入24x24，padding=1, kernel=3, stride=1, pool=2 -> 24x24->24x24->12x12
         self.conv3 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2)
         )
@@ -172,7 +199,7 @@ class NoPaddingLargeKernelFeatureExtractor(nn.Module):
         self.fc = nn.Linear(128, feature_dim)
 
     def forward(self, x):
-        # x: [N, 1, 64, 64]
+        # x: [N, 1, 96, 96]
         x = self.conv1(x)
         x = self.SK_1(x)
         x = self.conv2(x)

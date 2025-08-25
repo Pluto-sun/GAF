@@ -10,6 +10,7 @@ from .DualGAFDataLoader import DualGAFDataLoader
 from .DualGAFDataLoaderDDAHU import DualGAFDataLoaderDDAHU
 from .HVACGraphDataset import HVACGraphDataset
 from .RawFeatureWindowLoader import RawFeatureWindowLoader
+from .DualGAFDataLoaderFCU import DualGAFDataLoaderFCU
 
 __all__ = [
     'ClassificationSegLoader',
@@ -18,4 +19,5 @@ __all__ = [
     'HVACGraphDataset',
     'RawFeatureWindowLoader',
     'DualGAFDataLoaderDDAHU',
+    'DualGAFDataLoaderFCU',
 ] 

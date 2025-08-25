@@ -5,7 +5,7 @@ from torch import optim
 import numpy as np
 from data_provider.data_factory import data_provider
 from utils.tools import EarlyStopping, cal_accuracy
-from models import RestNet, ClusteredResNet, VGGNet, ClusteredVGGNet, ClusteredInception, GNN, MultiImageFeatureNet, DualGAFNet
+from models import RestNet, ClusteredResNet, VGGNet, ClusteredVGGNet, ClusteredInception, GNN, MultiImageFeatureNet, DualGAFNet, SimpleGAFNet, OneDCNN
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -18,82 +18,146 @@ import torch.optim as optim
 import time
 import warnings
 from torch.optim import lr_scheduler
+import logging
+import sys
+from datetime import datetime
 # 已移除未使用的导入：visual_long, save_metrics_to_csv, create_exp_folder 这些函数在utils/tools.py中不存在
 # from utils.tools import adjust_learning_rate, visual  # 这些函数存在但未使用
 torch.cuda.empty_cache()
 # 设置中文字体支持的函数
 def setup_chinese_font():
-    """设置matplotlib中文字体支持"""
-    # 尝试不同的中文字体（包括更多变体）
+    """设置matplotlib中文字体支持 - 优化版本"""
+    # 清除matplotlib字体缓存
+    import shutil
+    import os
+    try:
+        mpl_cache = matplotlib.get_cachedir()
+        if os.path.exists(mpl_cache):
+            shutil.rmtree(mpl_cache)
+        print("✓ matplotlib字体缓存已清除")
+    except Exception as e:
+        print(f"⚠️ 清除字体缓存失败: {e}")
+    
+    # 重新加载字体管理器
+    fm.fontManager = fm.FontManager()
+    
+    # 扩展的中文字体列表（基于实际系统安装）
     chinese_fonts = [
-        'Noto Sans CJK SC',     # Google Noto简体中文字体
-        'Noto Sans CJK TC',     # Google Noto繁体中文字体  
-        'Noto Serif CJK SC',    # Google Noto简体中文衬线字体
-        'SimHei',               # Windows系统黑体
-        'Microsoft YaHei',      # Windows系统微软雅黑
-        'PingFang SC',          # macOS系统苹方字体
-        'Hiragino Sans GB',     # macOS系统
-        'WenQuanYi Micro Hei',  # Linux系统文泉驿微米黑
-        'WenQuanYi Zen Hei',    # Linux系统文泉驿正黑
-        'Source Han Sans SC',   # Adobe思源黑体
-        'AR PL UMing CN',       # Arphic字体
-        'DejaVu Sans',          # 备用字体
+        # 新安装的Noto CJK字体（优先）
+        'Noto Sans CJK SC Regular',
+        'Noto Sans CJK SC',
+        'Noto Sans CJK TC', 
+        'Noto Serif CJK SC',
+        # 文泉驿字体（Linux常用）
+        'WenQuanYi Micro Hei',
+        'WenQuanYi Zen Hei',
+        'WenQuanYi Micro Hei Light',
+        # 思源字体
+        'Source Han Sans SC',
+        'Source Han Sans CN',
+        # Windows字体（如果在Wine环境下）
+        'SimHei',
+        'Microsoft YaHei',
+        'SimSun',
+        # macOS字体
+        'PingFang SC',
+        'Hiragino Sans GB',
+        # AR PL字体
+        'AR PL UMing CN',
+        'AR PL UKai CN',
+        # 备用字体
+        'DejaVu Sans',
     ]
     
     # 获取系统可用字体
-    available_fonts = [f.name for f in fm.fontManager.ttflist]
+    available_fonts = []
+    for font in fm.fontManager.ttflist:
+        available_fonts.append(font.name)
     
-    # 调试：打印一些可用的字体名称
-    print("正在检测中文字体...")
+    print("🔍 正在检测中文字体...")
+    print(f"系统总字体数: {len(available_fonts)}")
     
     # 找到第一个可用的中文字体
     selected_font = None
     for font in chinese_fonts:
         if font in available_fonts:
             selected_font = font
-            print(f"✓ 找到字体: {font}")
+            print(f"✅ 找到预设字体: {font}")
             break
         else:
-            print(f"✗ 未找到: {font}")
+            print(f"❌ 未找到: {font}")
     
-    # 如果没有找到预设字体，尝试查找任何包含CJK或中文关键词的字体
+    # 如果没有找到预设字体，智能搜索CJK字体
     if not selected_font:
-        print("在预设字体中未找到，尝试查找其他CJK字体...")
-        # 查找各种可能的中文字体
-        cjk_keywords = ['CJK', 'Noto', 'AR PL', 'UMing', 'SimSun', 'SimHei', 'Ming', 'Gothic']
+        print("🔍 在预设字体中未找到，智能搜索CJK字体...")
+        cjk_keywords = ['Noto', 'CJK', 'WenQuanYi', 'Source Han', 'AR PL', 'SimHei', 'YaHei']
         cjk_fonts = []
+        
         for font in fm.fontManager.ttflist:
             font_name = font.name
+            font_path = font.fname
+            
+            # 检查字体名称是否包含CJK关键词
             if any(keyword in font_name for keyword in cjk_keywords):
                 cjk_fonts.append(font_name)
+                print(f"🔍 发现CJK字体: {font_name} ({font_path})")
         
-        # 去重并优先选择更好的字体
+        # 去重并按优先级排序
         cjk_fonts = list(set(cjk_fonts))
         if cjk_fonts:
-            # 优先选择Noto字体，其次是AR PL字体
-            preferred_fonts = [f for f in cjk_fonts if 'Noto' in f]
-            if not preferred_fonts:
-                preferred_fonts = [f for f in cjk_fonts if 'AR PL' in f]
-            if not preferred_fonts:
-                preferred_fonts = cjk_fonts
+            # 按优先级排序：Noto > WenQuanYi > Source Han > AR PL > 其他
+            priority_order = ['Noto', 'WenQuanYi', 'Source Han', 'AR PL']
             
-            selected_font = preferred_fonts[0]
-            print(f"✓ 找到CJK字体: {selected_font}")
-            print(f"可用的其他CJK字体: {cjk_fonts[:3]}...")  # 只显示前3个
+            for priority in priority_order:
+                matching_fonts = [f for f in cjk_fonts if priority in f]
+                if matching_fonts:
+                    selected_font = matching_fonts[0]
+                    print(f"✅ 选择优先级字体: {selected_font}")
+                    break
+            
+            if not selected_font:
+                selected_font = cjk_fonts[0]
+                print(f"✅ 选择首个CJK字体: {selected_font}")
+            
+            print(f"📋 其他可用CJK字体: {cjk_fonts[:5]}...")  # 显示前5个
         else:
-            print("✗ 未找到任何CJK字体")
+            print("❌ 未找到任何CJK字体")
     
+    # 配置matplotlib
     if selected_font:
-        print(f"使用字体: {selected_font}")
-        matplotlib.rcParams['font.sans-serif'] = [selected_font] + chinese_fonts
+        print(f"🎨 应用字体配置: {selected_font}")
+        # 设置字体族，包含后备字体
+        font_list = [selected_font] + chinese_fonts + ['DejaVu Sans', 'Arial Unicode MS']
+        matplotlib.rcParams['font.sans-serif'] = font_list
+        matplotlib.rcParams['font.family'] = 'sans-serif'
     else:
-        print("未找到中文字体，使用默认字体配置")
-        matplotlib.rcParams['font.sans-serif'] = chinese_fonts
+        print("⚠️ 未找到中文字体，使用备用配置")
+        matplotlib.rcParams['font.sans-serif'] = chinese_fonts + ['DejaVu Sans']
+        matplotlib.rcParams['font.family'] = 'sans-serif'
     
+    # 通用配置
     matplotlib.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+    matplotlib.rcParams['figure.max_open_warning'] = 0  # 禁用图形数量警告
     plt.rcParams['font.size'] = 10  # 设置默认字体大小
+    
+    # 验证字体是否正常工作
+    try:
+        fig, ax = plt.subplots(figsize=(1, 1))
+        ax.text(0.5, 0.5, '测试中文字体', ha='center', va='center')
+        plt.close(fig)
+        print("✅ 中文字体验证成功")
+    except Exception as e:
+        print(f"⚠️ 中文字体验证失败: {e}")
+    
+    print(f"📝 最终字体配置: {matplotlib.rcParams['font.sans-serif'][:3]}...")
 
-setup_chinese_font()
+# 使用优化的字体配置模块
+try:
+    from utils.font_config import quick_setup
+    quick_setup()
+except ImportError:
+    # 如果字体配置模块不可用，使用原来的函数
+    setup_chinese_font()
 
 
 import time
@@ -109,12 +173,14 @@ class Exp(object):
             'ClusteredInception': ClusteredInception,
             'GNN': GNN,
             'MultiImageFeatureNet': MultiImageFeatureNet,
-            'DualGAFNet': DualGAFNet
+            'DualGAFNet': DualGAFNet,
+            'SimpleGAFNet': SimpleGAFNet,
+            'OneDCNN': OneDCNN
         }
-        if args.model == 'Mamba':
-            print('Please make sure you have successfully installed mamba_ssm')
-            from models import Mamba
-            self.model_dict['Mamba'] = Mamba
+        # if args.model == 'Mamba':
+        #     print('Please make sure you have successfully installed mamba_ssm')
+        #     from models import Mamba
+        #     self.model_dict['Mamba'] = Mamba
         self.device = self._acquire_device()
         self.train_data, self.train_loader = self._get_data(flag='train')
         self.vali_data, self.vali_loader = self._get_data(flag='val')
@@ -122,6 +188,204 @@ class Exp(object):
         self.class_names = self._get_class_names()
         self.model = self._build_model().to(self.device)
         self.time_stamp = time.strftime('%m%d_%H%M')
+        
+        # 初始化日志系统
+        self.logger, self.log_file = self._setup_logging()
+        
+    def _setup_logging(self):
+        """设置日志系统，同时输出到终端和文件"""
+        # 创建与plot_results一致的目录结构
+        log_dir = os.path.join(self.args.result_path, f"{self.time_stamp}_{self.setting}")
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 创建日志文件路径
+        log_file = os.path.join(log_dir, "training.log")
+        
+        # 创建日志器
+        logger = logging.getLogger(f'exp_{self.setting}')
+        logger.setLevel(logging.INFO)
+        
+        # 清除已有的处理器
+        logger.handlers.clear()
+        
+        # 创建文件处理器
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # 创建控制台处理器
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        
+        # 设置格式
+        file_formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)-8s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        console_formatter = logging.Formatter('%(message)s')
+        
+        file_handler.setFormatter(file_formatter)
+        console_handler.setFormatter(console_formatter)
+        
+        # 添加处理器
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+        
+        # 防止日志向上传播
+        logger.propagate = False
+        
+        # 记录日志开始信息
+        logger.info("=" * 80)
+        logger.info(f"实验日志开始: {self.setting}")
+        logger.info(f"日志文件: {log_file}")
+        logger.info(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("=" * 80)
+        
+        return logger, log_file
+    
+    def log_info(self, message):
+        """记录信息日志"""
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.info(message)
+        else:
+            print(message)
+    
+    def log_warning(self, message):
+        """记录警告日志"""
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.warning(message)
+        else:
+            print(f"WARNING: {message}")
+    
+    def log_error(self, message):
+        """记录错误日志"""
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.error(message)
+        else:
+            print(f"ERROR: {message}")
+    
+    def log_config(self):
+        """记录实验配置"""
+        self.log_info("⚙️ 实验配置:")
+        for key, value in self.args.__dict__.items():
+            if not key.startswith('_'):
+                self.log_info(f"   {key}: {value}")
+    
+    def log_model_info(self):
+        """记录模型信息"""
+        self.log_info("🏗️ 模型信息:")
+        self.log_info(f"   模型类型: {type(self.model).__name__}")
+        
+        # 计算参数数量
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        
+        self.log_info(f"   总参数数量: {total_params:,}")
+        self.log_info(f"   可训练参数: {trainable_params:,}")
+        self.log_info(f"   模型大小估计: {total_params * 4 / (1024**2):.2f} MB")
+    
+    def log_data_info(self):
+        """记录数据集信息"""
+        self.log_info("📊 数据集信息:")
+        self.log_info(f"   训练集大小: {len(self.train_data)}")
+        self.log_info(f"   验证集大小: {len(self.vali_data)}")
+    
+    def log_epoch_metrics(self, epoch, train_loss, train_acc, val_metrics, learning_rate, scheduler_type=None):
+        """记录每轮训练的详细指标"""
+        self.log_info(f"Epoch {epoch+1}:")
+        self.log_info(f"  训练指标:")
+        self.log_info(f"    损失({getattr(self.args, 'loss_type', 'ce')}): {train_loss:.6f}")
+        self.log_info(f"    准确率: {train_acc:.6f}")
+        self.log_info(f"    学习率: {learning_rate:.8f}")
+        
+        self.log_info(f"  验证指标(标准CE):")
+        self.log_info(f"    损失: {val_metrics['loss']:.6f}")
+        self.log_info(f"    准确率: {val_metrics['accuracy']:.6f}")
+        self.log_info(f"    F1(macro): {val_metrics['f1_macro']:.6f}")
+        self.log_info(f"    F1(weighted): {val_metrics['f1_weighted']:.6f}")
+        self.log_info(f"    精确率: {val_metrics['precision']:.6f}")
+        self.log_info(f"    召回率: {val_metrics['recall']:.6f}")
+        
+        # 如果有调度器信息，记录调度器类型
+        if scheduler_type:
+            self.log_info(f"  学习率调度器: {scheduler_type}")
+        
+        self.log_info("-" * 60)
+    
+    def log_learning_rate_change(self, old_lr, new_lr, scheduler_type, val_metrics):
+        """记录学习率变化"""
+        self.log_info(f"🎯 学习率调整事件:")
+        self.log_info(f"  调度器类型: {scheduler_type}")
+        self.log_info(f"  学习率变化: {old_lr:.8f} → {new_lr:.8f}")
+        
+        if scheduler_type == 'f1_based':
+            self.log_info(f"  触发条件: F1分数 = {val_metrics['f1_weighted']:.6f}")
+        elif scheduler_type.startswith('composite'):
+            self.log_info(f"  触发条件: F1分数 = {val_metrics['f1_weighted']:.6f}, 验证损失 = {val_metrics['loss']:.6f}")
+        else:
+            self.log_info(f"  触发条件: 验证损失 = {val_metrics['loss']:.6f}")
+        
+        self.log_info(f"  变化幅度: {((new_lr - old_lr) / old_lr * 100):+.2f}%")
+        self.log_info("-" * 60)
+    
+    def log_epoch_summary(self, epoch, train_loss, train_acc, val_metrics, learning_rate, is_best_model=False):
+        """记录每轮训练的简要总结"""
+        status = "🏆 [最佳模型]" if is_best_model else ""
+        self.log_info(f"Epoch {epoch+1:3d} | Train: Loss={train_loss:.4f}, Acc={train_acc:.4f} | "
+                      f"Val: Loss={val_metrics['loss']:.4f}, Acc={val_metrics['accuracy']:.4f}, "
+                      f"F1={val_metrics['f1_weighted']:.4f} | LR={learning_rate:.6f} {status}")
+    
+    def log_training_history(self, history):
+        """记录完整训练历史到CSV文件"""
+        import csv
+        
+        # 创建CSV文件路径
+        log_dir = os.path.join(self.args.result_path, f"{self.time_stamp}_{self.setting}")
+        csv_file = os.path.join(log_dir, "training_history.csv")
+        
+        # 准备CSV数据
+        csv_data = []
+        epochs = len(history['train_losses'])
+        
+        for epoch in range(epochs):
+            row = {
+                'Epoch': epoch + 1,
+                'Train_Loss': history['train_losses'][epoch],
+                'Train_Acc': history['train_accs'][epoch],
+                'Val_Loss': history['val_metrics']['loss'][epoch],
+                'Val_Acc': history['val_metrics']['accuracy'][epoch],
+                'Val_F1_Macro': history['val_metrics']['f1_macro'][epoch],
+                'Val_F1_Weighted': history['val_metrics']['f1_weighted'][epoch],
+                'Val_Precision': history['val_metrics']['precision'][epoch],
+                'Val_Recall': history['val_metrics']['recall'][epoch],
+            }
+            
+            # 添加学习率信息（如果有）
+            if 'learning_rates' in history:
+                row['Learning_Rate'] = history['learning_rates'][epoch]
+            
+            csv_data.append(row)
+        
+        # 写入CSV文件
+        if csv_data:
+            with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=csv_data[0].keys())
+                writer.writeheader()
+                writer.writerows(csv_data)
+            
+            self.log_info(f"训练历史已保存到: {csv_file}")
+    
+    def close_logger(self):
+        """关闭日志器"""
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.info("=" * 80)
+            self.logger.info(f"实验日志结束: {self.setting}")
+            self.logger.info(f"结束时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            self.logger.info("=" * 80)
+            
+            # 关闭所有处理器
+            for handler in self.logger.handlers:
+                handler.close()
+            self.logger.handlers.clear()
         
 
     def _build_model(self):
@@ -281,26 +545,100 @@ class Exp(object):
     
     def _select_lr_scheduler(self, optimizer):
         """
-        配置ReduceLROnPlateau学习率调度器
+        配置学习率调度器
         
-        针对用户的训练情况优化：
-        - batch_size=4, 每个epoch=1492个batch
-        - 小batch_size训练，需要更平缓的学习率调整策略
+        支持多种调度策略：
+        - 基于F1分数：直接关注分类性能，适合分类任务（推荐）
+        - 基于验证损失：传统方法，适合损失与性能一致的场景
+        - 复合策略：结合两种指标，更稳健的调度
         """
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode='min',           # 监控验证损失，越小越好
-            factor=0.5,           # 学习率缩减为原来的50%（适中的缩减）
-            patience=5,           # 5个epoch没有改善才调整（考虑到小batch训练的不稳定性）
-            min_lr=1e-6,         # 最小学习率
-            cooldown=2,          # 调整后等待2个epoch再次检查
-            threshold=0.001,     # 改善阈值，避免因微小波动导致过早调整
-            threshold_mode='rel', # 相对阈值模式
-            eps=1e-8             # 数值稳定性参数
-        )
+        # 获取调度器类型配置
+        scheduler_type = getattr(self.args, 'lr_scheduler_type', 'f1_based')
         
-        print(f"📈 配置ReduceLROnPlateau学习率调度器:")
-        print(f"   → 监控指标: 验证损失")
+        # 基础参数配置
+        base_params = {
+            'factor': 0.5,           # 学习率缩减为原来的50%
+            'patience': 7,           # 5个epoch没有改善才调整
+            'min_lr': 1e-6,         # 最小学习率
+            'cooldown': 2,          # 调整后等待2个epoch再次检查
+            'threshold': 0.001,      # F1分数改善阈值：1%的相对改善才算有效
+            'threshold_mode': 'rel', # 相对阈值模式
+            'eps': 1e-8,            # 数值稳定性参数
+            'verbose': True         # 打印调整信息
+        }
+        
+        try:
+            # 尝试导入F1调度器
+            from utils.f1_based_scheduler import create_lr_scheduler
+            
+            if scheduler_type == 'f1_based':
+                scheduler = create_lr_scheduler(optimizer, 'f1_based', **base_params)
+                print(f"🎯 配置基于F1分数的学习率调度器:")
+                print(f"   → 监控指标: F1分数（更适合分类任务）")
+                print(f"   → 优势: 直接关注分类性能，避免损失震荡影响")
+                print(f"   → 触发条件: F1分数连续{base_params['patience']}轮无改善")
+                
+            elif scheduler_type == 'composite_f1_priority':
+                scheduler = create_lr_scheduler(optimizer, 'composite_f1_priority', **base_params)
+                print(f"🔄 配置复合学习率调度器（F1优先）:")
+                print(f"   → 主要监控: F1分数")
+                print(f"   → 辅助监控: 验证损失")
+                print(f"   → 策略: F1停滞时优先调整，损失异常时辅助调整")
+                print(f"   → 触发条件: F1分数连续{base_params['patience']}轮无改善")
+                
+            elif scheduler_type == 'composite_weighted':
+                # 可配置权重
+                loss_weight = getattr(self.args, 'lr_loss_weight', 0.3)
+                f1_weight = getattr(self.args, 'lr_f1_weight', 0.7)
+                scheduler = create_lr_scheduler(
+                    optimizer, 'composite_weighted',
+                    loss_weight=loss_weight, f1_weight=f1_weight,
+                    **base_params
+                )
+                print(f"⚖️ 配置加权复合学习率调度器:")
+                print(f"   → 损失权重: {loss_weight}")
+                print(f"   → F1权重: {f1_weight}")
+                print(f"   → 策略: 综合考虑两个指标的加权组合")
+                print(f"   → 触发条件: 复合指标连续{base_params['patience']}轮无改善")
+                
+            elif scheduler_type == 'composite_loss_priority':
+                scheduler = create_lr_scheduler(optimizer, 'composite_loss_priority', **base_params)
+                print(f"🔄 配置复合学习率调度器（损失优先）:")
+                print(f"   → 主要监控: 验证损失")
+                print(f"   → 辅助监控: F1分数")
+                print(f"   → 策略: 损失停滞时优先调整，F1异常时辅助调整")
+                print(f"   → 触发条件: 验证损失连续{base_params['patience']}轮无改善")
+                
+            else:
+                # 默认使用损失调度器（向后兼容）
+                scheduler = create_lr_scheduler(optimizer, 'loss_based', **base_params)
+                print(f"📉 配置基于验证损失的学习率调度器:")
+                print(f"   → 监控指标: 验证损失（传统方法）")
+                print(f"   → 触发条件: 验证损失连续{base_params['patience']}轮无改善")
+                
+        except ImportError as e:
+            # 如果F1调度器不可用，回退到标准调度器
+            print(f"⚠️ F1调度器导入失败: {e}")
+            print("回退到标准损失调度器")
+            scheduler_type = 'loss_based'  # 更新调度器类型以确保正确调用
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', **base_params
+            )
+            print(f"📉 配置ReduceLROnPlateau学习率调度器:")
+            print(f"   → 监控指标: 验证损失")
+            print(f"   → 触发条件: 验证损失连续{base_params['patience']}轮无改善")
+        except Exception as e:
+            # 其他异常处理
+            print(f"⚠️ 学习率调度器初始化异常: {e}")
+            print("回退到标准损失调度器")
+            scheduler_type = 'loss_based'  # 更新调度器类型以确保正确调用
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', **base_params
+            )
+            print(f"📉 配置ReduceLROnPlateau学习率调度器:")
+            print(f"   → 监控指标: 验证损失")
+        
+        # 通用配置信息
         print(f"   → 缩减因子: 0.5 (学习率减半)")
         print(f"   → 耐心度: 5个epoch")
         print(f"   → 最小学习率: 1e-6")
@@ -866,36 +1204,46 @@ class Exp(object):
         return metrics
 
     def train(self):
+        # 记录实验开始信息
+        self.log_config()
+        self.log_model_info()
+        self.log_data_info()
+        
         path = os.path.join(self.args.checkpoints, self.setting)
         if not os.path.exists(path):    
             os.makedirs(path)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
         model_optim = self._select_optimizer()
         lr_scheduler = self._select_lr_scheduler(model_optim)  # 创建学习率调度器
+        
+        # 记录实际使用的调度器类型
+        actual_scheduler_type = getattr(self.args, 'lr_scheduler_type', 'f1_based')
+        
         self.criterion = self._select_criterion()
         
         # 按照主流ML规范说明损失函数使用策略
-        print("\n" + "="*80)
-        print("📋 损失函数使用策略（遵循主流机器学习规范）:")
-        print(f"   🎯 训练阶段: 使用 {self.args.loss_type if hasattr(self.args, 'loss_type') else 'ce'} 损失函数")
-        print(f"      → 目的：优化模型参数，解决特定问题（类别不平衡、相似性等）")
-        print(f"   📊 验证阶段: 使用标准交叉熵损失函数")
-        print(f"      → 目的：客观评估模型性能，便于不同方法比较")
-        print(f"   📈 最终报告: 基于标准交叉熵损失的指标")
-        print(f"      → 目的：提供可信、可比较的性能指标")
-        print("="*80 + "\n")
+        self.log_info("\n" + "="*80)
+        self.log_info("📋 损失函数使用策略（遵循主流机器学习规范）:")
+        self.log_info(f"   🎯 训练阶段: 使用 {self.args.loss_type if hasattr(self.args, 'loss_type') else 'ce'} 损失函数")
+        self.log_info(f"      → 目的：优化模型参数，解决特定问题（类别不平衡、相似性等）")
+        self.log_info(f"   📊 验证阶段: 使用标准交叉熵损失函数")
+        self.log_info(f"      → 目的：客观评估模型性能，便于不同方法比较")
+        self.log_info(f"   📈 最终报告: 基于标准交叉熵损失的指标")
+        self.log_info(f"      → 目的：提供可信、可比较的性能指标")
+        self.log_info("="*80 + "\n")
         
         # 梯度累积配置
         gradient_accumulation_steps = getattr(self.args, 'gradient_accumulation_steps', 1)
         if gradient_accumulation_steps > 1:
-            print(f"🔄 梯度累积配置: 每{gradient_accumulation_steps}轮累积一次梯度")
-            print(f"   实际batch_size: {self.args.batch_size}")
-            print(f"   有效batch_size: {self.args.batch_size * gradient_accumulation_steps}")
+            self.log_info(f"🔄 梯度累积配置: 每{gradient_accumulation_steps}轮累积一次梯度")
+            self.log_info(f"   实际batch_size: {self.args.batch_size}")
+            self.log_info(f"   有效batch_size: {self.args.batch_size * gradient_accumulation_steps}")
         else:
-            print(f"🔄 梯度累积: 已禁用（gradient_accumulation_steps=1）")
+            self.log_info(f"🔄 梯度累积: 已禁用（gradient_accumulation_steps=1）")
         
         train_losses = []
         train_accs = []
+        learning_rates = []  # 添加学习率记录
         val_metrics_history = {
             'loss': [],
             'accuracy': [],
@@ -904,6 +1252,9 @@ class Exp(object):
             'precision': [],
             'recall': []
         }
+        
+        # 初始化最佳指标追踪
+        best_val_f1 = 0.0
         
 
         
@@ -919,11 +1270,11 @@ class Exp(object):
             
             self.model.train()
             if gradient_accumulation_steps > 1:
-                train_bar = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.args.train_epochs} [GA:{gradient_accumulation_steps}]', ncols=80)
+                train_bar = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.args.train_epochs} [GA:{gradient_accumulation_steps}]', ncols=100)
                 # 梯度累积模式：初始化梯度清零
                 model_optim.zero_grad()
             else:
-                train_bar = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.args.train_epochs}', ncols=80)
+                train_bar = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.args.train_epochs}', ncols=100)
             
             for batch_idx, batch in enumerate(train_bar):
                 # 判断是图类型的数据集还是图像数据集
@@ -1113,7 +1464,7 @@ class Exp(object):
                     
                     if is_accumulation_step or is_last_batch:
                         # 进行梯度裁剪和参数更新
-                        nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
+                        nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                         model_optim.step()
                         model_optim.zero_grad()  # 清零梯度，准备下一次累积
                         
@@ -1146,13 +1497,17 @@ class Exp(object):
             train_acc = correct / total
             val_metrics = self.vali()
             
+            # 获取当前学习率
+            current_lr = model_optim.param_groups[0]['lr']
+            
             # 保存训练历史
             train_losses.append(train_loss)
             train_accs.append(train_acc)
+            learning_rates.append(current_lr)
             for key in val_metrics_history.keys():
                 val_metrics_history[key].append(val_metrics[key])
             
-                    # 打印详细的训练信息
+            # 打印详细的训练信息
             print(f"Epoch: {epoch+1}")
             print(f"  训练 - Loss({self.args.loss_type if hasattr(self.args, 'loss_type') else 'ce'}): {train_loss:.4f}, Acc: {train_acc:.4f}")
             print(f"  验证 - Loss(标准CE): {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.4f}")
@@ -1160,20 +1515,64 @@ class Exp(object):
             print(f"        Precision: {val_metrics['precision']:.4f}, Recall: {val_metrics['recall']:.4f}")
             print("-" * 80)
             
-            # 更新学习率调度器（基于验证损失）
-            current_lr = model_optim.param_groups[0]['lr']
-            lr_scheduler.step(val_metrics['loss'])
+            # 记录每轮的详细指标到日志
+            self.log_epoch_metrics(epoch, train_loss, train_acc, val_metrics, current_lr, actual_scheduler_type)
+            
+            # 更新学习率调度器（智能选择监控指标）
+            try:
+                if actual_scheduler_type in ['composite_f1_priority', 'composite_weighted', 'composite_loss_priority']:
+                    # 复合调度器需要两个参数
+                    if hasattr(lr_scheduler, 'step') and len(lr_scheduler.step.__code__.co_varnames) > 2:
+                        lr_scheduler.step(val_metrics['loss'], val_metrics['f1_weighted'])
+                    else:
+                        # 回退策略：如果不是真正的复合调度器，使用F1分数
+                        self.log_warning(f"复合调度器调用失败，回退到F1分数调度")
+                        lr_scheduler.step(val_metrics['f1_weighted'])
+                elif actual_scheduler_type == 'f1_based':
+                    # F1调度器：监控F1分数（越高越好）
+                    lr_scheduler.step(val_metrics['f1_weighted'])
+                else:
+                    # 损失调度器（默认）：监控验证损失（越低越好）
+                    lr_scheduler.step(val_metrics['loss'])
+            except Exception as e:
+                self.log_error(f"学习率调度器调用失败: {e}")
+                self.log_warning(f"回退到损失调度策略")
+                # 安全回退：使用验证损失
+                if hasattr(lr_scheduler, 'step'):
+                    lr_scheduler.step(val_metrics['loss'])
+            
             new_lr = model_optim.param_groups[0]['lr']
             
-            # 如果学习率发生变化，打印信息
+            # 如果学习率发生变化，打印详细信息并记录到日志
             if new_lr != current_lr:
-                print(f"🔄 学习率调整: {current_lr:.6f} → {new_lr:.6f}")
+                if actual_scheduler_type == 'f1_based':
+                    print(f"🎯 基于F1分数调整学习率: {current_lr:.6f} → {new_lr:.6f}")
+                    print(f"   当前F1分数: {val_metrics['f1_weighted']:.4f}")
+                elif actual_scheduler_type.startswith('composite'):
+                    print(f"🔄 复合指标调整学习率: {current_lr:.6f} → {new_lr:.6f}")
+                    print(f"   F1分数: {val_metrics['f1_weighted']:.4f}, 验证损失: {val_metrics['loss']:.4f}")
+                else:
+                    print(f"📉 基于验证损失调整学习率: {current_lr:.6f} → {new_lr:.6f}")
+                    print(f"   当前验证损失: {val_metrics['loss']:.4f}")
+                
+                # 记录学习率变化到日志
+                self.log_learning_rate_change(current_lr, new_lr, actual_scheduler_type, val_metrics)
+            
+            # 检查是否为最佳模型
+            is_best_model = False
+            if val_metrics['f1_weighted'] > best_val_f1:
+                best_val_f1 = val_metrics['f1_weighted']
+                is_best_model = True
+            
+            # 记录简要总结到日志
+            self.log_epoch_summary(epoch, train_loss, train_acc, val_metrics, new_lr, is_best_model)
             
             # 使用F1分数进行早停（也可以选择使用准确率或其他指标）
             # 这里我们使用加权F1分数，因为它考虑了类别不平衡
             early_stopping(-val_metrics['f1_weighted'], self.model, path)
             if early_stopping.early_stop:
                 print(f"早停触发，在第 {epoch+1} 轮停止训练")
+                self.log_info(f"⏹️ 早停触发，在第 {epoch+1} 轮停止训练")
                 break
         # 训练结束后加载最优模型
         best_model_path = os.path.join(path, 'checkpoint.pth')
@@ -1187,6 +1586,7 @@ class Exp(object):
         history = {
             'train_losses': train_losses,
             'train_accs': train_accs,
+            'learning_rates': learning_rates,  # 添加学习率历史
             'val_metrics': val_metrics_history,
             'best_val_acc': max(val_metrics_history['accuracy']) if val_metrics_history['accuracy'] else 0,
             'best_val_f1_macro': max(val_metrics_history['f1_macro']) if val_metrics_history['f1_macro'] else 0,
@@ -1194,6 +1594,9 @@ class Exp(object):
             # 添加最佳模型的真实性能指标
             'best_model_metrics': best_model_metrics
         }
+        
+        # 记录完整的训练历史到CSV文件
+        self.log_training_history(history)
         
         # 打印最终训练总结（使用最佳模型的真实性能）
         print("\n" + "="*100)
@@ -1214,7 +1617,30 @@ class Exp(object):
         print(f"  验证召回率: {best_model_metrics['recall']:.4f}")
         print("="*100)
         
+        # 记录最终训练总结到日志
+        self.log_info("\n" + "="*100)
+        self.log_info("🎉 训练完成总结:")
+        self.log_info(f"  训练损失函数: {self.args.loss_type if hasattr(self.args, 'loss_type') else 'ce'}")
+        self.log_info(f"  验证损失函数: 标准交叉熵（遵循主流ML规范）")
+        self.log_info(f"  训练过程最佳验证准确率: {history['best_val_acc']:.4f}")
+        self.log_info(f"  训练过程最佳验证F1(macro): {history['best_val_f1_macro']:.4f}")
+        self.log_info(f"  训练过程最佳验证F1(weighted): {history['best_val_f1_weighted']:.4f}")
+        self.log_info(f"  训练轮数: {len(train_losses)}")
+        self.log_info("-" * 50)
+        self.log_info("📊 最佳模型真实性能指标（基于标准交叉熵损失）:")
+        self.log_info(f"  验证损失(标准CE): {best_model_metrics['loss']:.4f}")
+        self.log_info(f"  验证准确率: {best_model_metrics['accuracy']:.4f}")
+        self.log_info(f"  验证F1(macro): {best_model_metrics['f1_macro']:.4f}")
+        self.log_info(f"  验证F1(weighted): {best_model_metrics['f1_weighted']:.4f}")
+        self.log_info(f"  验证精确率: {best_model_metrics['precision']:.4f}")
+        self.log_info(f"  验证召回率: {best_model_metrics['recall']:.4f}")
+        self.log_info("="*100)
+        
         self.plot_results(history)
+        
+        # 关闭日志器
+        self.close_logger()
+        
         return self.model, history
 
     def plot_results(self, history):
@@ -1521,7 +1947,7 @@ def save_model_checkpoint(model, setting, extra_dict=None):
 
 # 尝试导入timm优化实现
 try:
-    from timm.loss import LabelSmoothingCrossEntropy as TimmLabelSmoothingCE
+    from timm.loss.cross_entropy import LabelSmoothingCrossEntropy as TimmLabelSmoothingCE
     TIMM_AVAILABLE = True
 except ImportError:
     TIMM_AVAILABLE = False

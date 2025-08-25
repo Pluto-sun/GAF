@@ -110,5 +110,5 @@ def batch_resample_hvac_data(file_paths, method, interval='5T', max_workers=4):
 
 # 示例调用
 if __name__ == "__main__":
-    batch_resample_hvac_data("./dataset/DDAHU", "direct", interval='5T', max_workers=4)
+    batch_resample_hvac_data("./dataset/SAHU", "direct", interval='5T', max_workers=1)
     # batch_resample_hvac_data("./dataset/SAHU", "mean", interval='5T', max_workers=4)

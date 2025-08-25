@@ -1,0 +1,10 @@
+Metric,Value
+Best_Model_Val_Loss,0.046116167649427824
+Best_Model_Val_Acc,0.9786856127886323
+Best_Model_Val_F1_Macro,0.9796246601227312
+Best_Model_Val_F1_Weighted,0.9787352148793597
+Best_Model_Val_Precision,0.9795883065213631
+Best_Model_Val_Recall,0.979680131141136
+Training_Process_Best_Acc,0.9786856127886323
+Training_Process_Best_F1_Macro,0.9796246601227312
+Training_Process_Best_F1_Weighted,0.9787352148793597
