@@ -52,6 +52,7 @@ class DualGAFDataManager:
         self.step = args.step
         self.win_size = args.seq_len
         self.test_size = args.test_size
+        self.val_size = getattr(args, 'val_size', 0.2)  # 验证集比例，默认0.2
 
         # 数据类型转换方法选择
         self.data_type_method = getattr(args, "data_type_method", "float32")
@@ -140,7 +141,7 @@ class DualGAFDataManager:
             f"dual_gaf_data_win{self.win_size}_step{self.step}_files{len(self.file_label_map)}_{file_hash}_dtype{self.data_type_method}.pkl",
         )
 
-        # 初始化数据存储
+        # 初始化数据存储 - 三分割：训练集/验证集/测试集
         self.train_summation = None
         self.train_difference = None
         self.train_time_series = None  # 新增：原始时序数据
@@ -149,6 +150,10 @@ class DualGAFDataManager:
         self.val_difference = None
         self.val_time_series = None  # 新增：原始时序数据
         self.val_labels = None
+        self.test_summation = None
+        self.test_difference = None
+        self.test_time_series = None  # 新增：原始时序数据
+        self.test_labels = None
         self.scalers = None
 
         # 加载或处理数据
@@ -164,6 +169,8 @@ class DualGAFDataManager:
         print(f"双GAF数据管理器初始化完成")
         print(f"训练集: {len(self.train_summation)} 样本")
         print(f"验证集: {len(self.val_summation)} 样本")
+        print(f"测试集: {len(self.test_summation)} 样本")
+        print(f"数据划分比例 - 训练:{len(self.train_summation)/len(self.train_summation+self.val_summation+self.test_summation):.1%} 验证:{len(self.val_summation)/(len(self.train_summation)+len(self.val_summation)+len(self.test_summation)):.1%} 测试:{len(self.test_summation)/(len(self.train_summation)+len(self.val_summation)+len(self.test_summation)):.1%}")
 
     def _init_parallel_config(self):
         """延迟初始化并行处理配置（只在需要数据处理时调用）"""
@@ -393,23 +400,31 @@ class DualGAFDataManager:
             f"Difference GAF 数据范围: [{gaf_difference_data.min()}, {gaf_difference_data.max()}]"
         )
 
-        # 计算划分点
-        train_split = int(len(gaf_summation_data) * (1 - self.test_size))
+        # 计算三分割点 - 训练集(60%) + 验证集(20%) + 测试集(20%)
+        total_samples = len(gaf_summation_data)
+        train_split = int(total_samples * (1 - self.test_size - self.val_size))  # 训练集结束点
+        val_split = int(total_samples * (1 - self.test_size))  # 验证集结束点
 
-        # 划分数据集
+        # 三分割数据集
         self.train_summation = gaf_summation_data[:train_split]
         self.train_difference = gaf_difference_data[:train_split]
         self.train_time_series = labeled_windows[:train_split]  # 保存原始时序数据
         self.train_labels = labeled_labels[:train_split]
 
-        self.val_summation = gaf_summation_data[train_split:]
-        self.val_difference = gaf_difference_data[train_split:]
-        self.val_time_series = labeled_windows[train_split:]  # 保存原始时序数据
-        self.val_labels = labeled_labels[train_split:]
+        self.val_summation = gaf_summation_data[train_split:val_split]
+        self.val_difference = gaf_difference_data[train_split:val_split]
+        self.val_time_series = labeled_windows[train_split:val_split]  # 保存原始时序数据
+        self.val_labels = labeled_labels[train_split:val_split]
 
-        print("\n=== 数据集划分完成 ===")
-        print(f"训练集: {len(self.train_summation)} 样本")
-        print(f"验证集: {len(self.val_summation)} 样本")
+        self.test_summation = gaf_summation_data[val_split:]
+        self.test_difference = gaf_difference_data[val_split:]
+        self.test_time_series = labeled_windows[val_split:]  # 保存原始时序数据
+        self.test_labels = labeled_labels[val_split:]
+
+        print("\n=== 数据集三分割完成 ===")
+        print(f"训练集: {len(self.train_summation)} 样本 ({len(self.train_summation)/total_samples:.1%})")
+        print(f"验证集: {len(self.val_summation)} 样本 ({len(self.val_summation)/total_samples:.1%})")
+        print(f"测试集: {len(self.test_summation)} 样本 ({len(self.test_summation)/total_samples:.1%})")
 
         # 数据处理完成后自动保存
         print("\n=== 保存预处理数据 ===")
@@ -1227,39 +1242,103 @@ class DualGAFDataManager:
         with open(path, "rb") as f:
             data = pickle.load(f)
 
-        # 校验双GAF数据格式完整性
-        required_keys = [
-            "train_summation",
-            "train_difference",
-            "val_summation",
-            "val_difference",
-            "train_labels",
-            "val_labels",
+        # 校验双GAF数据格式完整性 - 支持新旧版本
+        required_keys_v2 = [
+            "train_summation", "train_difference", "train_labels",
+            "val_summation", "val_difference", "val_labels", 
+            "test_summation", "test_difference", "test_labels",
             "scalers",
         ]
-        if not all(key in data for key in required_keys):
+        required_keys_v1 = [
+            "train_summation", "train_difference",
+            "val_summation", "val_difference",
+            "train_labels", "val_labels", "scalers",
+        ]
+        
+        is_v2_format = all(key in data for key in required_keys_v2)
+        is_v1_format = all(key in data for key in required_keys_v1)
+        
+        if is_v2_format:
+            print("✅ 检测到新版本格式（包含测试集）")
+            self.train_summation = data["train_summation"]
+            self.train_difference = data["train_difference"]
+            self.val_summation = data["val_summation"]
+            self.val_difference = data["val_difference"]
+            self.test_summation = data["test_summation"]
+            self.test_difference = data["test_difference"]
+            self.train_labels = data["train_labels"]
+            self.val_labels = data["val_labels"]
+            self.test_labels = data["test_labels"]
+            self.scalers = data["scalers"]
+        elif is_v1_format:
+            print("⚠️ 检测到旧版本格式（无测试集），正在升级...")
+            # 加载训练集和验证集
+            train_summation = data["train_summation"]
+            train_difference = data["train_difference"]
+            val_summation = data["val_summation"]
+            val_difference = data["val_difference"]
+            train_labels = data["train_labels"]
+            val_labels = data["val_labels"]
+            
+            # 重新组合所有数据并三分割
+            all_summation = np.concatenate([train_summation, val_summation], axis=0)
+            all_difference = np.concatenate([train_difference, val_difference], axis=0)
+            all_labels = np.concatenate([train_labels, val_labels], axis=0)
+            
+            total_samples = len(all_summation)
+            train_split = int(total_samples * (1 - self.test_size - self.val_size))
+            val_split = int(total_samples * (1 - self.test_size))
+            
+            self.train_summation = all_summation[:train_split]
+            self.train_difference = all_difference[:train_split]
+            self.train_labels = all_labels[:train_split]
+            
+            self.val_summation = all_summation[train_split:val_split]
+            self.val_difference = all_difference[train_split:val_split]
+            self.val_labels = all_labels[train_split:val_split]
+            
+            self.test_summation = all_summation[val_split:]
+            self.test_difference = all_difference[val_split:]
+            self.test_labels = all_labels[val_split:]
+            
+            self.scalers = data["scalers"]
+            print(f"   升级完成：训练集{len(self.train_summation)}, 验证集{len(self.val_summation)}, 测试集{len(self.test_summation)}")
+        else:
             raise ValueError("持久化文件数据格式不完整，可能版本不兼容")
 
-        self.train_summation = data["train_summation"]
-        self.train_difference = data["train_difference"]
-        self.val_summation = data["val_summation"]
-        self.val_difference = data["val_difference"]
-        self.train_labels = data["train_labels"]
-        self.val_labels = data["val_labels"]
-        self.scalers = data["scalers"]
-
-        # 加载原始时序数据（兼容旧版本文件）
-        if "train_time_series" in data and "val_time_series" in data:
+        # 加载原始时序数据（兼容新旧版本文件）
+        if is_v2_format and all(key in data for key in ["train_time_series", "val_time_series", "test_time_series"]):
+            # 新版本格式：直接加载三个数据集的时序数据
             self.train_time_series = data["train_time_series"]
             self.val_time_series = data["val_time_series"]
+            self.test_time_series = data["test_time_series"]
+        elif "train_time_series" in data and "val_time_series" in data:
+            # 旧版本格式：重新划分时序数据
+            print("警告：检测到旧版本时序数据，正在重新划分...")
+            old_train_time_series = data["train_time_series"]
+            old_val_time_series = data["val_time_series"]
+            
+            # 重新组合并三分割
+            all_time_series = np.concatenate([old_train_time_series, old_val_time_series], axis=0)
+            total_samples = len(all_time_series)
+            train_split = int(total_samples * (1 - self.test_size - self.val_size))
+            val_split = int(total_samples * (1 - self.test_size))
+            
+            self.train_time_series = all_time_series[:train_split]
+            self.val_time_series = all_time_series[train_split:val_split]
+            self.test_time_series = all_time_series[val_split:]
         else:
-            # 如果旧版本文件没有时序数据，从labeled_windows重新生成
+            # 如果没有时序数据，从labeled_windows重新生成
             print("警告：持久化文件中没有时序数据，正在从原始窗口数据重新生成...")
             if "labeled_windows" in data:
                 labeled_windows = data["labeled_windows"]
-                train_split = int(len(labeled_windows) * (1 - self.test_size))
+                total_samples = len(labeled_windows)
+                train_split = int(total_samples * (1 - self.test_size - self.val_size))
+                val_split = int(total_samples * (1 - self.test_size))
+                
                 self.train_time_series = labeled_windows[:train_split]
-                self.val_time_series = labeled_windows[train_split:]
+                self.val_time_series = labeled_windows[train_split:val_split]
+                self.test_time_series = labeled_windows[val_split:]
             else:
                 raise ValueError(
                     "持久化文件中既没有时序数据也没有原始窗口数据，无法生成"
@@ -1287,25 +1366,35 @@ class DualGAFDataManager:
         print(f"✅ 从 {path} 加载双GAF数据完成（单进程加载，无子进程创建）")
 
     def persist_data(self, path, labeled_windows, labeled_labels):
-        """持久化保存预处理好的双GAF数据"""
+        """持久化保存预处理好的双GAF数据 - 三分割版本"""
         data = {
+            # GAF数据 - 三个数据集
             "train_summation": self.train_summation,
             "train_difference": self.train_difference,
-            "train_time_series": self.train_time_series,  # 新增：保存原始时序数据
+            "train_time_series": self.train_time_series,
             "val_summation": self.val_summation,
             "val_difference": self.val_difference,
-            "val_time_series": self.val_time_series,  # 新增：保存原始时序数据
+            "val_time_series": self.val_time_series,
+            "test_summation": self.test_summation,
+            "test_difference": self.test_difference,
+            "test_time_series": self.test_time_series,
+            # 标签 - 三个数据集
             "train_labels": self.train_labels,
             "val_labels": self.val_labels,
+            "test_labels": self.test_labels,
+            # 其他配置信息
             "scalers": self.scalers,
             "win_size": self.win_size,
             "step": self.step,
+            "val_size": self.val_size,  # 新增：验证集比例
             "file_map": self.file_label_map,
             "data_type_method": self.data_type_method,
             "labeled_windows": labeled_windows,
             "labeled_labels": labeled_labels,
             "label_to_idx": self.label_to_idx,
             "idx_to_label": self.idx_to_label,
+            # 版本标识
+            "format_version": "v2_with_test_set"
         }
 
         with open(path, "wb") as f:
@@ -1352,8 +1441,17 @@ class DualGAFDataLoaderDDAHU(Dataset):
                 else None
             )
             self.labels = self.data_manager.val_labels
+        elif flag == "test":
+            self.summation_data = self.data_manager.test_summation
+            self.difference_data = self.data_manager.test_difference
+            self.time_series_data = (
+                self.data_manager.test_time_series
+                if self.use_statistical_features or self.use_signal_level_stats
+                else None
+            )
+            self.labels = self.data_manager.test_labels
         else:
-            raise ValueError(f"不支持的flag值: {flag}，应为'train'或'val'")
+            raise ValueError(f"不支持的flag值: {flag}，应为'train'、'val'或'test'")
 
         print(f"创建{flag}数据集视图，包含{len(self)}个样本")
         if self.use_statistical_features:

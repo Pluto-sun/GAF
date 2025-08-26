@@ -184,6 +184,7 @@ class Exp(object):
         self.device = self._acquire_device()
         self.train_data, self.train_loader = self._get_data(flag='train')
         self.vali_data, self.vali_loader = self._get_data(flag='val')
+        self.test_data, self.test_loader = self._get_data(flag='test')  # 新增：测试集
         # 获取标签映射信息（如果数据集支持）
         self.class_names = self._get_class_names()
         self.model = self._build_model().to(self.device)
@@ -288,6 +289,13 @@ class Exp(object):
         self.log_info("📊 数据集信息:")
         self.log_info(f"   训练集大小: {len(self.train_data)}")
         self.log_info(f"   验证集大小: {len(self.vali_data)}")
+        self.log_info(f"   测试集大小: {len(self.test_data)}")
+        
+        total_samples = len(self.train_data) + len(self.vali_data) + len(self.test_data)
+        self.log_info(f"   数据划分比例:")
+        self.log_info(f"     训练集: {len(self.train_data)/total_samples:.1%}")
+        self.log_info(f"     验证集: {len(self.vali_data)/total_samples:.1%}")
+        self.log_info(f"     测试集: {len(self.test_data)/total_samples:.1%}")
     
     def log_epoch_metrics(self, epoch, train_loss, train_acc, val_metrics, learning_rate, scheduler_type=None):
         """记录每轮训练的详细指标"""
@@ -475,9 +483,109 @@ class Exp(object):
         print(f"  - 类别数: {self.args.num_class}")
         print(f"  - 模型类型: {self.args.model}")
         print(f"="*100)
+        
+        # 🔥 打印模型结构和参数分布（使用真实样本形状）
+        self._print_model_structure_with_sample_shape(model, sample)
+        
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
+
+    def _print_model_structure_with_sample_shape(self, model, sample):
+        """
+        使用真实样本形状打印模型结构和参数分布
+        
+        Args:
+            model: 构建好的模型
+            sample: 从train_loader获取的真实样本
+        """
+        print("\n" + "🏗️" + "="*78)
+        print("🏗️ 模型结构和参数分析（基于真实样本形状）")
+        print("🏗️" + "="*78)
+        
+        # 检查模型是否有print_model_structure方法
+        if not hasattr(model, 'print_model_structure'):
+            print(f"⚠️ 模型 {type(model).__name__} 不支持 print_model_structure 方法")
+            print(f"📊 基本参数统计:")
+            total_params = sum(p.numel() for p in model.parameters())
+            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print(f"   总参数量: {total_params:,}")
+            print(f"   可训练参数: {trainable_params:,}")
+            print(f"   模型大小: {total_params * 4 / (1024**2):.2f} MB")
+            print("🏗️" + "="*78 + "\n")
+            return
+        
+        try:
+            # 根据不同的数据格式确定输入形状
+            input_shape = None
+            
+            if hasattr(sample, 'x') and hasattr(sample, 'edge_index'):
+                # GNN数据格式
+                print(f"📋 数据格式: GNN")
+                print(f"   节点特征形状: {sample.x.shape}")
+                print(f"   边索引形状: {sample.edge_index.shape}")
+                if hasattr(sample, 'batch'):
+                    print(f"   批次信息: {sample.batch.shape}")
+                # GNN数据没有固定的输入形状概念，跳过形状分析
+                input_shape = None
+                
+            elif len(sample) == 3:
+                # 双路GAF数据（旧版本格式）：(sum_data, diff_data, label)
+                sum_data, diff_data, label = sample
+                print(f"📋 数据格式: DualGAF (三元组 - 无统计特征)")
+                print(f"   Sum GAF形状: {sum_data.shape}")
+                print(f"   Diff GAF形状: {diff_data.shape}")
+                print(f"   标签形状: {label.shape}")
+                # 使用GAF数据的形状作为输入形状
+                input_shape = tuple(sum_data.shape)
+                
+            elif len(sample) == 4:
+                # 增强双路GAF数据（新版本格式）：(sum_data, diff_data, time_series_data, label)
+                sum_data, diff_data, time_series_data, label = sample
+                print(f"📋 数据格式: DualGAF (四元组 - 包含统计特征)")
+                print(f"   Sum GAF形状: {sum_data.shape}")
+                print(f"   Diff GAF形状: {diff_data.shape}")
+                print(f"   时序数据形状: {time_series_data.shape}")
+                print(f"   标签形状: {label.shape}")
+                # 使用GAF数据的形状作为输入形状
+                input_shape = tuple(sum_data.shape)
+                
+            else:
+                # 普通分类数据：(data, label)
+                sample_data, label = sample
+                print(f"📋 数据格式: 标准分类")
+                print(f"   数据形状: {sample_data.shape}")
+                print(f"   标签形状: {label.shape}")
+                # 使用数据的形状作为输入形状
+                input_shape = tuple(sample_data.shape)
+            
+            print(f"📐 用于分析的输入形状: {input_shape}")
+            print()
+            
+            # 调用模型的print_model_structure方法
+            model.print_model_structure(input_shape=input_shape, detailed=True)
+            
+        except Exception as e:
+            print(f"❌ 打印模型结构时发生错误: {str(e)}")
+            print(f"📊 回退到基本参数统计:")
+            
+            try:
+                total_params = sum(p.numel() for p in model.parameters())
+                trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                print(f"   总参数量: {total_params:,}")
+                print(f"   可训练参数: {trainable_params:,}")
+                print(f"   模型大小: {total_params * 4 / (1024**2):.2f} MB")
+                
+                # 尝试打印模型的主要子模块
+                print(f"\n🏛️ 主要模块:")
+                for name, module in model.named_children():
+                    module_params = sum(p.numel() for p in module.parameters())
+                    print(f"   {name}: {type(module).__name__} ({module_params:,} 参数)")
+                    
+            except Exception as e2:
+                print(f"❌ 基本统计也失败: {str(e2)}")
+        
+        print("🏗️" + "="*78 + "\n")
 
     def _acquire_device(self):
         if self.args.use_gpu and self.args.gpu_type == 'cuda':
@@ -1203,6 +1311,248 @@ class Exp(object):
         self.model.train()
         return metrics
 
+    def test(self):
+        """测试集评估 - 用于训练完成后的最终性能评估"""
+        self.model.eval()
+        self.model.to(self.device)
+        all_preds = []
+        all_labels = []
+        all_probs = []
+        
+        # 用于保存分类错误样本的时序数据
+        misclassified_samples = []
+        sample_index = 0  # 样本索引计数器
+        
+        # 使用标准交叉熵损失进行评估（遵循主流ML规范）
+        eval_criterion = self._select_evaluation_criterion()
+        total_loss = []
+        
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(self.test_loader):
+                try:
+                    if hasattr(batch, 'x') and hasattr(batch, 'y'):
+                        # GNN数据
+                        if batch.y.numel() == 0:
+                            print(f"警告: 测试批次 {batch_idx} 为空，跳过")
+                            continue
+                        batch=batch.to(self.device)
+                        out = self.model(batch)
+                        loss = eval_criterion(out, batch.y)
+                        probs = F.softmax(out, dim=1)
+                        pred = out.argmax(dim=1)
+                        
+                        # 处理标签形状
+                        label_squeezed = batch.y.long().squeeze(-1) if batch.y.dim() > 1 else batch.y.long()
+                        
+                        # 收集错误分类的样本
+                        for i in range(len(pred)):
+                            if pred[i] != label_squeezed[i]:
+                                misclassified_samples.append({
+                                    'sample_index': sample_index + i,
+                                    'batch_index': batch_idx,
+                                    'true_label': label_squeezed[i].item(),
+                                    'predicted_label': pred[i].item(),
+                                    'prediction_prob': probs[i].cpu().numpy(),
+                                    'data_type': 'GNN',
+                                    'time_series': None
+                                })
+                        
+                        all_preds.extend(pred.cpu().numpy())
+                        all_labels.extend(label_squeezed.cpu().numpy())
+                        all_probs.extend(probs.cpu().numpy())
+                        sample_index += len(pred)
+                        
+                    elif len(batch) == 3:
+                        # 双路GAF数据（旧版本格式）
+                        sum_data, diff_data, label = batch
+                        if sum_data.size(0) == 0 or diff_data.size(0) == 0 or label.numel() == 0:
+                            print(f"警告: 测试批次 {batch_idx} 为空，跳过")
+                            continue
+                        
+                        sum_data = sum_data.float().to(self.device)
+                        diff_data = diff_data.float().to(self.device)
+                        label = label.to(self.device)
+                        
+                        if torch.isnan(sum_data).any() or torch.isinf(sum_data).any() or torch.isnan(diff_data).any() or torch.isinf(diff_data).any():
+                            print(f"警告: 测试批次 {batch_idx} 包含NaN或Inf值，跳过")
+                            continue
+                        
+                        out = self.model(sum_data, diff_data)
+                        label_for_loss = label.long()
+                        if label_for_loss.dim() > 1 and label_for_loss.size(-1) == 1:
+                            label_for_loss = label_for_loss.squeeze(-1)
+                        loss = eval_criterion(out, label_for_loss)
+                        probs = F.softmax(out, dim=1)
+                        pred = out.argmax(dim=1)
+                        
+                        # 处理标签形状
+                        label_squeezed = label.long().squeeze(-1) if label.dim() > 1 else label.long()
+                        
+                        # 收集错误分类的样本
+                        for i in range(len(pred)):
+                            if pred[i] != label_squeezed[i]:
+                                misclassified_samples.append({
+                                    'sample_index': sample_index + i,
+                                    'batch_index': batch_idx,
+                                    'true_label': label_squeezed[i].item(),
+                                    'predicted_label': pred[i].item(),
+                                    'prediction_prob': probs[i].cpu().numpy(),
+                                    'data_type': 'DualGAF_v1',
+                                    'time_series': None
+                                })
+                        
+                        all_preds.extend(pred.cpu().numpy())
+                        all_labels.extend(label_squeezed.cpu().numpy())
+                        all_probs.extend(probs.cpu().numpy())
+                        sample_index += len(pred)
+                        
+                    elif len(batch) == 4:
+                        # 增强双路GAF数据（新版本格式）
+                        sum_data, diff_data, time_series_data, label = batch
+                        if sum_data.size(0) == 0 or diff_data.size(0) == 0 or time_series_data.size(0) == 0 or label.numel() == 0:
+                            print(f"警告: 测试批次 {batch_idx} 为空，跳过")
+                            continue
+                        
+                        sum_data = sum_data.float().to(self.device)
+                        diff_data = diff_data.float().to(self.device)
+                        time_series_data = time_series_data.float().to(self.device)
+                        label = label.to(self.device)
+                        
+                        if (torch.isnan(sum_data).any() or torch.isinf(sum_data).any() or 
+                            torch.isnan(diff_data).any() or torch.isinf(diff_data).any() or
+                            torch.isnan(time_series_data).any() or torch.isinf(time_series_data).any()):
+                            print(f"警告: 测试批次 {batch_idx} 包含NaN或Inf值，跳过")
+                            continue
+                        
+                        out = self.model(sum_data, diff_data, time_series_data)
+                        label_for_loss = label.long()
+                        if label_for_loss.dim() > 1 and label_for_loss.size(-1) == 1:
+                            label_for_loss = label_for_loss.squeeze(-1)
+                        loss = eval_criterion(out, label_for_loss)
+                        probs = F.softmax(out, dim=1)
+                        pred = out.argmax(dim=1)
+                        
+                        # 处理标签形状
+                        label_squeezed = label.long().squeeze(-1) if label.dim() > 1 else label.long()
+                        
+                        # 收集错误分类的样本
+                        for i in range(len(pred)):
+                            if pred[i] != label_squeezed[i]:
+                                sample_time_series = time_series_data[i].cpu().numpy()
+                                misclassified_samples.append({
+                                    'sample_index': sample_index + i,
+                                    'batch_index': batch_idx,
+                                    'true_label': label_squeezed[i].item(),
+                                    'predicted_label': pred[i].item(),
+                                    'prediction_prob': probs[i].cpu().numpy(),
+                                    'data_type': 'DualGAF_v2',
+                                    'time_series': sample_time_series
+                                })
+                        
+                        all_preds.extend(pred.cpu().numpy())
+                        all_labels.extend(label_squeezed.cpu().numpy())
+                        all_probs.extend(probs.cpu().numpy())
+                        sample_index += len(pred)
+                        
+                    else:
+                        # 普通分类数据
+                        batch_x, label = batch
+                        if batch_x.size(0) == 0 or label.numel() == 0:
+                            print(f"警告: 测试批次 {batch_idx} 为空，跳过")
+                            continue
+                        
+                        batch_x = batch_x.float().to(self.device)
+                        label = label.to(self.device)
+                        
+                        if torch.isnan(batch_x).any() or torch.isinf(batch_x).any():
+                            print(f"警告: 测试批次 {batch_idx} 包含NaN或Inf值，跳过")
+                            continue
+                        
+                        out = self.model(batch_x)
+                        label_for_loss = label.long()
+                        if label_for_loss.dim() > 1 and label_for_loss.size(-1) == 1:
+                            label_for_loss = label_for_loss.squeeze(-1)
+                        loss = eval_criterion(out, label_for_loss)
+                        probs = F.softmax(out, dim=1)
+                        pred = out.argmax(dim=1)
+                        
+                        # 处理标签形状
+                        label_squeezed = label.long().squeeze(-1) if label.dim() > 1 else label.long()
+                        
+                        # 收集错误分类的样本
+                        for i in range(len(pred)):
+                            if pred[i] != label_squeezed[i]:
+                                sample_data = batch_x[i].cpu().numpy()
+                                misclassified_samples.append({
+                                    'sample_index': sample_index + i,
+                                    'batch_index': batch_idx,
+                                    'true_label': label_squeezed[i].item(),
+                                    'predicted_label': pred[i].item(),
+                                    'prediction_prob': probs[i].cpu().numpy(),
+                                    'data_type': 'Standard',
+                                    'time_series': sample_data
+                                })
+                        
+                        all_preds.extend(pred.cpu().numpy())
+                        all_labels.extend(label_squeezed.cpu().numpy())
+                        all_probs.extend(probs.cpu().numpy())
+                        sample_index += len(pred)
+                    
+                    total_loss.append(loss.item())
+                    
+                except Exception as e:
+                    print(f"测试批次 {batch_idx} 出现错误: {e}")
+                    continue
+        
+        # 检查是否有有效的测试数据
+        if len(all_labels) == 0 or len(all_preds) == 0:
+            print("警告: 测试集为空，返回默认指标")
+            return {
+                'loss': float('inf'),
+                'accuracy': 0.0,
+                'f1_macro': 0.0,
+                'f1_weighted': 0.0,
+                'precision': 0.0,
+                'recall': 0.0,
+                'classification_report': "测试集为空",
+                'confusion_matrix': None,
+                'misclassified_samples': []
+            }
+        
+        # 计算各种评估指标
+        avg_loss = np.average(total_loss) if total_loss else float('inf')
+        acc = accuracy_score(all_labels, all_preds)
+        
+        # 计算F1分数（处理多分类和二分类情况）
+        if self.args.num_class <= 2:
+            f1_macro = f1_score(all_labels, all_preds, average='binary')
+            f1_weighted = f1_score(all_labels, all_preds, average='binary')
+            precision = precision_score(all_labels, all_preds, average='binary')
+            recall = recall_score(all_labels, all_preds, average='binary')
+        else:
+            f1_macro = f1_score(all_labels, all_preds, average='macro')
+            f1_weighted = f1_score(all_labels, all_preds, average='weighted')
+            precision = precision_score(all_labels, all_preds, average='macro')
+            recall = recall_score(all_labels, all_preds, average='macro')
+        
+        # 生成分类报告和混淆矩阵
+        report = classification_report(all_labels, all_preds, target_names=self.class_names)
+        cm = confusion_matrix(all_labels, all_preds)
+        
+        test_metrics = {
+            'loss': avg_loss,
+            'accuracy': acc,
+            'f1_macro': f1_macro,
+            'f1_weighted': f1_weighted,
+            'precision': precision,
+            'recall': recall,
+            'classification_report': report,
+            'confusion_matrix': cm,
+            'misclassified_samples': misclassified_samples
+        }
+        
+        return test_metrics
+
     def train(self):
         # 记录实验开始信息
         self.log_config()
@@ -1579,8 +1929,12 @@ class Exp(object):
         self.model.load_state_dict(torch.load(best_model_path))
         print("🔄 已加载最佳模型，正在评估真实性能...")
         
-        # 使用最佳模型重新评估验证集，获取真实的最佳性能指标
-        best_model_metrics = self.vali()
+        # 使用最佳模型重新评估验证集和测试集，获取真实的最佳性能指标
+        print("🔄 使用最佳模型评估验证集性能...")
+        best_model_val_metrics = self.vali()
+        
+        print("🔄 使用最佳模型评估测试集性能...")
+        best_model_test_metrics = self.test()
         
         # 构建更完整的训练历史记录
         history = {
@@ -1591,8 +1945,9 @@ class Exp(object):
             'best_val_acc': max(val_metrics_history['accuracy']) if val_metrics_history['accuracy'] else 0,
             'best_val_f1_macro': max(val_metrics_history['f1_macro']) if val_metrics_history['f1_macro'] else 0,
             'best_val_f1_weighted': max(val_metrics_history['f1_weighted']) if val_metrics_history['f1_weighted'] else 0,
-            # 添加最佳模型的真实性能指标
-            'best_model_metrics': best_model_metrics
+            # 添加最佳模型的真实性能指标（验证集和测试集）
+            'best_model_val_metrics': best_model_val_metrics,
+            'best_model_test_metrics': best_model_test_metrics
         }
         
         # 记录完整的训练历史到CSV文件
@@ -1602,38 +1957,54 @@ class Exp(object):
         print("\n" + "="*100)
         print("🎉 训练完成总结:")
         print(f"  训练损失函数: {self.args.loss_type if hasattr(self.args, 'loss_type') else 'ce'}")
-        print(f"  验证损失函数: 标准交叉熵（遵循主流ML规范）")
+        print(f"  验证/测试损失函数: 标准交叉熵（遵循主流ML规范）")
         print(f"  训练过程最佳验证准确率: {history['best_val_acc']:.4f}")
         print(f"  训练过程最佳验证F1(macro): {history['best_val_f1_macro']:.4f}")
         print(f"  训练过程最佳验证F1(weighted): {history['best_val_f1_weighted']:.4f}")
         print(f"  训练轮数: {len(train_losses)}")
         print("-" * 50)
-        print("📊 最佳模型真实性能指标（基于标准交叉熵损失）:")
-        print(f"  验证损失(标准CE): {best_model_metrics['loss']:.4f}")
-        print(f"  验证准确率: {best_model_metrics['accuracy']:.4f}")
-        print(f"  验证F1(macro): {best_model_metrics['f1_macro']:.4f}")
-        print(f"  验证F1(weighted): {best_model_metrics['f1_weighted']:.4f}")
-        print(f"  验证精确率: {best_model_metrics['precision']:.4f}")
-        print(f"  验证召回率: {best_model_metrics['recall']:.4f}")
+        print("📊 最佳模型验证集性能（基于标准交叉熵损失）:")
+        print(f"  验证损失(标准CE): {best_model_val_metrics['loss']:.4f}")
+        print(f"  验证准确率: {best_model_val_metrics['accuracy']:.4f}")
+        print(f"  验证F1(macro): {best_model_val_metrics['f1_macro']:.4f}")
+        print(f"  验证F1(weighted): {best_model_val_metrics['f1_weighted']:.4f}")
+        print(f"  验证精确率: {best_model_val_metrics['precision']:.4f}")
+        print(f"  验证召回率: {best_model_val_metrics['recall']:.4f}")
+        print("-" * 50)
+        print("🏆 最佳模型测试集性能（最终评估结果）:")
+        print(f"  测试损失(标准CE): {best_model_test_metrics['loss']:.4f}")
+        print(f"  测试准确率: {best_model_test_metrics['accuracy']:.4f}")
+        print(f"  测试F1(macro): {best_model_test_metrics['f1_macro']:.4f}")
+        print(f"  测试F1(weighted): {best_model_test_metrics['f1_weighted']:.4f}")
+        print(f"  测试精确率: {best_model_test_metrics['precision']:.4f}")
+        print(f"  测试召回率: {best_model_test_metrics['recall']:.4f}")
         print("="*100)
         
         # 记录最终训练总结到日志
         self.log_info("\n" + "="*100)
         self.log_info("🎉 训练完成总结:")
         self.log_info(f"  训练损失函数: {self.args.loss_type if hasattr(self.args, 'loss_type') else 'ce'}")
-        self.log_info(f"  验证损失函数: 标准交叉熵（遵循主流ML规范）")
+        self.log_info(f"  验证/测试损失函数: 标准交叉熵（遵循主流ML规范）")
         self.log_info(f"  训练过程最佳验证准确率: {history['best_val_acc']:.4f}")
         self.log_info(f"  训练过程最佳验证F1(macro): {history['best_val_f1_macro']:.4f}")
         self.log_info(f"  训练过程最佳验证F1(weighted): {history['best_val_f1_weighted']:.4f}")
         self.log_info(f"  训练轮数: {len(train_losses)}")
         self.log_info("-" * 50)
-        self.log_info("📊 最佳模型真实性能指标（基于标准交叉熵损失）:")
-        self.log_info(f"  验证损失(标准CE): {best_model_metrics['loss']:.4f}")
-        self.log_info(f"  验证准确率: {best_model_metrics['accuracy']:.4f}")
-        self.log_info(f"  验证F1(macro): {best_model_metrics['f1_macro']:.4f}")
-        self.log_info(f"  验证F1(weighted): {best_model_metrics['f1_weighted']:.4f}")
-        self.log_info(f"  验证精确率: {best_model_metrics['precision']:.4f}")
-        self.log_info(f"  验证召回率: {best_model_metrics['recall']:.4f}")
+        self.log_info("📊 最佳模型验证集性能（基于标准交叉熵损失）:")
+        self.log_info(f"  验证损失(标准CE): {best_model_val_metrics['loss']:.4f}")
+        self.log_info(f"  验证准确率: {best_model_val_metrics['accuracy']:.4f}")
+        self.log_info(f"  验证F1(macro): {best_model_val_metrics['f1_macro']:.4f}")
+        self.log_info(f"  验证F1(weighted): {best_model_val_metrics['f1_weighted']:.4f}")
+        self.log_info(f"  验证精确率: {best_model_val_metrics['precision']:.4f}")
+        self.log_info(f"  验证召回率: {best_model_val_metrics['recall']:.4f}")
+        self.log_info("-" * 50)
+        self.log_info("🏆 最佳模型测试集性能（最终评估结果）:")
+        self.log_info(f"  测试损失(标准CE): {best_model_test_metrics['loss']:.4f}")
+        self.log_info(f"  测试准确率: {best_model_test_metrics['accuracy']:.4f}")
+        self.log_info(f"  测试F1(macro): {best_model_test_metrics['f1_macro']:.4f}")
+        self.log_info(f"  测试F1(weighted): {best_model_test_metrics['f1_weighted']:.4f}")
+        self.log_info(f"  测试精确率: {best_model_test_metrics['precision']:.4f}")
+        self.log_info(f"  测试召回率: {best_model_test_metrics['recall']:.4f}")
         self.log_info("="*100)
         
         self.plot_results(history)
@@ -1816,8 +2187,38 @@ class Exp(object):
         })
         metrics_df.to_csv(os.path.join(path, 'training_metrics.csv'), index=False)
         
-        # 保存最佳模型的真实性能指标（如果可用）
-        if 'best_model_metrics' in history:
+        # 保存最佳模型的真实性能指标（包含验证集和测试集）
+        if 'best_model_val_metrics' in history and 'best_model_test_metrics' in history:
+            val_metrics = history['best_model_val_metrics']
+            test_metrics = history['best_model_test_metrics']
+            
+            summary_df = pd.DataFrame({
+                'Metric': [
+                    # 训练过程中的最佳验证指标
+                    'Training_Process_Best_Val_Acc', 'Training_Process_Best_Val_F1_Macro', 'Training_Process_Best_Val_F1_Weighted',
+                    # 最佳模型在验证集上的性能
+                    'Best_Model_Val_Loss', 'Best_Model_Val_Acc', 'Best_Model_Val_F1_Macro', 
+                    'Best_Model_Val_F1_Weighted', 'Best_Model_Val_Precision', 'Best_Model_Val_Recall',
+                    # 最佳模型在测试集上的性能（最终评估结果）
+                    'Best_Model_Test_Loss', 'Best_Model_Test_Acc', 'Best_Model_Test_F1_Macro',
+                    'Best_Model_Test_F1_Weighted', 'Best_Model_Test_Precision', 'Best_Model_Test_Recall'
+                ],
+                'Value': [
+                    # 训练过程指标
+                    history['best_val_acc'], history['best_val_f1_macro'], history['best_val_f1_weighted'],
+                    # 验证集指标
+                    val_metrics['loss'], val_metrics['accuracy'], val_metrics['f1_macro'],
+                    val_metrics['f1_weighted'], val_metrics['precision'], val_metrics['recall'],
+                    # 测试集指标
+                    test_metrics['loss'], test_metrics['accuracy'], test_metrics['f1_macro'],
+                    test_metrics['f1_weighted'], test_metrics['precision'], test_metrics['recall']
+                ]
+            })
+            summary_df.to_csv(os.path.join(path, 'best_model_summary.csv'), index=False)
+            print(f"训练结果已保存到: {path}")
+            print(f"📊 最佳模型性能（验证集+测试集）已记录到: best_model_summary.csv")
+        elif 'best_model_metrics' in history:
+            # 向后兼容：如果只有旧版本的best_model_metrics
             best_metrics = history['best_model_metrics']
             summary_df = pd.DataFrame({
                 'Metric': ['Best_Model_Val_Loss', 'Best_Model_Val_Acc', 'Best_Model_Val_F1_Macro', 
@@ -1857,15 +2258,207 @@ class Exp(object):
         plt.savefig(os.path.join(path, 'confusion_matrix.png'), dpi=300, bbox_inches='tight')
         plt.close()
 
+    def save_confusion_matrix_csv(self, cm):
+        """保存混淆矩阵为CSV文件"""
+        path = os.path.join(self.args.result_path, f"{self.time_stamp}_{self.setting}")
+        if not os.path.exists(path):
+            os.makedirs(path)
+        
+        # 创建混淆矩阵DataFrame
+        cm_df = pd.DataFrame(cm, 
+                            index=self.class_names, 
+                            columns=self.class_names)
+        
+        # 保存原始混淆矩阵
+        cm_file = os.path.join(path, 'confusion_matrix.csv')
+        cm_df.to_csv(cm_file, encoding='utf-8')
+        
+        # 计算并保存归一化混淆矩阵（按行归一化，显示分类准确率）
+        cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cm_normalized_df = pd.DataFrame(cm_normalized, 
+                                       index=self.class_names, 
+                                       columns=self.class_names)
+        cm_normalized_file = os.path.join(path, 'confusion_matrix_normalized.csv')
+        cm_normalized_df.to_csv(cm_normalized_file, encoding='utf-8')
+        
+        # 保存详细统计信息
+        stats_data = []
+        for i, class_name in enumerate(self.class_names):
+            true_positives = cm[i, i]
+            false_positives = cm[:, i].sum() - true_positives
+            false_negatives = cm[i, :].sum() - true_positives
+            true_negatives = cm.sum() - true_positives - false_positives - false_negatives
+            
+            precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+            recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+            f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            
+            stats_data.append({
+                'Class': class_name,
+                'True_Positives': true_positives,
+                'False_Positives': false_positives,
+                'False_Negatives': false_negatives,
+                'True_Negatives': true_negatives,
+                'Precision': precision,
+                'Recall': recall,
+                'F1_Score': f1
+            })
+        
+        stats_df = pd.DataFrame(stats_data)
+        stats_file = os.path.join(path, 'confusion_matrix_statistics.csv')
+        stats_df.to_csv(stats_file, index=False, encoding='utf-8')
+        
+        print(f"📊 混淆矩阵已保存:")
+        print(f"   原始矩阵: {cm_file}")
+        print(f"   归一化矩阵: {cm_normalized_file}")
+        print(f"   详细统计: {stats_file}")
+    
+    def save_misclassified_samples(self, misclassified_samples):
+        """保存分类错误样本的时序数据"""
+        if not misclassified_samples:
+            print("📊 没有分类错误的样本，无需保存时序数据")
+            return
+        
+        path = os.path.join(self.args.result_path, f"{self.time_stamp}_{self.setting}")
+        if not os.path.exists(path):
+            os.makedirs(path)
+        
+        # 创建错误样本目录
+        error_samples_dir = os.path.join(path, 'misclassified_samples')
+        if not os.path.exists(error_samples_dir):
+            os.makedirs(error_samples_dir)
+        
+        # 保存错误样本概要信息
+        summary_data = []
+        time_series_saved = 0
+        
+        for sample in misclassified_samples:
+            sample_info = {
+                'Sample_Index': sample['sample_index'],
+                'Batch_Index': sample['batch_index'],
+                'True_Label': sample['true_label'],
+                'True_Label_Name': self.class_names[sample['true_label']],
+                'Predicted_Label': sample['predicted_label'],
+                'Predicted_Label_Name': self.class_names[sample['predicted_label']],
+                'Data_Type': sample['data_type'],
+                'Has_Time_Series': sample['time_series'] is not None
+            }
+            
+            # 添加预测概率信息
+            pred_probs = sample['prediction_prob']
+            for i, class_name in enumerate(self.class_names):
+                sample_info[f'Prob_{class_name}'] = pred_probs[i]
+            
+            summary_data.append(sample_info)
+            
+            # 保存时序数据（如果存在）
+            if sample['time_series'] is not None:
+                time_series_file = os.path.join(error_samples_dir, 
+                                               f'sample_{sample["sample_index"]}_true_{sample["true_label"]}_pred_{sample["predicted_label"]}.csv')
+                
+                # 根据不同的数据格式保存时序数据
+                time_series = sample['time_series']
+                
+                if sample['data_type'] == 'DualGAF_v2':
+                    # 对于DualGAF_v2格式，智能判断数据形状
+                    if time_series.shape[0] > time_series.shape[1]:
+                        # 更可能是 [time_length, num_signals] 格式
+                        num_signals = time_series.shape[1]
+                        time_series_for_save = time_series  # 不需要转置
+                    else:
+                        # 更可能是 [num_signals, time_length] 格式  
+                        num_signals = time_series.shape[0]
+                        time_series_for_save = time_series.T  # 需要转置
+                    
+                    # 生成信号名称，确保数量匹配实际数据
+                    actual_num_signals = time_series_for_save.shape[1]
+                    if hasattr(self.args, 'feature_columns') and self.args.feature_columns is not None:
+                        # 如果有特征列名信息，取前actual_num_signals个
+                        signal_names = self.args.feature_columns[:actual_num_signals]
+                        # 如果特征列名不够，补充默认名称
+                        if len(signal_names) < actual_num_signals:
+                            signal_names.extend([f'Signal_{i}' for i in range(len(signal_names), actual_num_signals)])
+                    else:
+                        # 使用默认信号名称
+                        signal_names = [f'Signal_{i}' for i in range(actual_num_signals)]
+                    
+                    # 创建DataFrame: [time_length, num_signals]
+                    time_series_df = pd.DataFrame(time_series_for_save, columns=signal_names)
+                    time_series_df.index.name = 'Time_Step'
+                    
+                elif sample['data_type'] == 'Standard':
+                    # 对于标准格式，可能是图像序列或其他格式
+                    # 根据数据维度适配
+                    if len(time_series.shape) == 3:  # [channels, height, width]
+                        # 展平为2D便于保存
+                        flattened = time_series.reshape(time_series.shape[0], -1)
+                        time_series_df = pd.DataFrame(flattened.T)
+                        time_series_df.columns = [f'Channel_{i}' for i in range(flattened.shape[0])]
+                    elif len(time_series.shape) == 2:  # [features, time] or [time, features]
+                        time_series_df = pd.DataFrame(time_series.T)
+                        time_series_df.columns = [f'Feature_{i}' for i in range(time_series.shape[0])]
+                    else:
+                        # 1D数据
+                        time_series_df = pd.DataFrame(time_series.reshape(-1, 1), columns=['Value'])
+                    
+                    time_series_df.index.name = 'Index'
+                else:
+                    # 其他格式的处理
+                    time_series_df = pd.DataFrame(time_series)
+                    time_series_df.index.name = 'Index'
+                
+                # 添加元数据作为注释
+                metadata_comment = f"# Sample {sample['sample_index']} - True: {self.class_names[sample['true_label']]} ({sample['true_label']}), " \
+                                 f"Predicted: {self.class_names[sample['predicted_label']]} ({sample['predicted_label']})\n" \
+                                 f"# Data Type: {sample['data_type']}\n" \
+                                 f"# Prediction Probabilities: {dict(zip(self.class_names, pred_probs))}\n"
+                
+                # 保存CSV文件
+                with open(time_series_file, 'w', encoding='utf-8') as f:
+                    f.write(metadata_comment)
+                    time_series_df.to_csv(f)
+                
+                time_series_saved += 1
+        
+        # 保存错误样本概要
+        summary_df = pd.DataFrame(summary_data)
+        summary_file = os.path.join(error_samples_dir, 'misclassified_samples_summary.csv')
+        summary_df.to_csv(summary_file, index=False, encoding='utf-8')
+        
+        # 按错误类型统计
+        error_type_stats = summary_df.groupby(['True_Label_Name', 'Predicted_Label_Name']).size().reset_index(name='Count')
+        error_type_file = os.path.join(error_samples_dir, 'error_type_statistics.csv')
+        error_type_stats.to_csv(error_type_file, index=False, encoding='utf-8')
+        
+        print(f"🔍 分类错误样本分析结果:")
+        print(f"   总错误样本数: {len(misclassified_samples)}")
+        print(f"   包含时序数据的错误样本: {time_series_saved}")
+        print(f"   错误样本概要: {summary_file}")
+        print(f"   错误类型统计: {error_type_file}")
+        print(f"   时序数据目录: {error_samples_dir}")
+        
+        # 显示前几个错误类型的统计
+        if len(error_type_stats) > 0:
+            print(f"   主要错误类型:")
+            for _, row in error_type_stats.head(5).iterrows():
+                print(f"     {row['True_Label_Name']} → {row['Predicted_Label_Name']}: {row['Count']} 个样本")
+
     def evaluate_report(self):
-        """通用评估报告，兼容GNN和普通分类模型"""
+        """通用评估报告，基于测试集生成最终报告"""
         self.model.eval()
         self.model.to(self.device)
         all_preds = []
         all_labels = []
         all_probs = []
+        
+        # 用于保存分类错误样本的时序数据
+        misclassified_samples = []
+        sample_index = 0  # 样本索引计数器
+        
+        print("📊 生成测试集评估报告...")
+        
         with torch.no_grad():
-            for batch in self.vali_loader:
+            for batch_idx, batch in enumerate(self.test_loader):
                 if hasattr(batch, 'x') and hasattr(batch, 'y'):
                     # GNN数据
                     batch = batch.to(self.device)
@@ -1876,11 +2469,26 @@ class Exp(object):
                     # 处理标签形状
                     label_squeezed = batch.y.long().squeeze(-1) if batch.y.dim() > 1 else batch.y.long()
                     
+                    # 收集错误分类的样本（GNN数据暂不保存时序数据）
+                    for i in range(len(pred)):
+                        if pred[i] != label_squeezed[i]:
+                            misclassified_samples.append({
+                                'sample_index': sample_index + i,
+                                'batch_index': batch_idx,
+                                'true_label': label_squeezed[i].item(),
+                                'predicted_label': pred[i].item(),
+                                'prediction_prob': probs[i].cpu().numpy(),
+                                'data_type': 'GNN',
+                                'time_series': None  # GNN数据没有明确的时序格式
+                            })
+                    
                     all_preds.extend(pred.cpu().numpy())
                     all_labels.extend(label_squeezed.cpu().numpy())
                     all_probs.extend(probs.cpu().numpy())
+                    sample_index += len(pred)
+                    
                 elif len(batch) == 3:
-                    # 双路GAF数据（旧版本格式）
+                    # 双路GAF数据（旧版本格式）- 没有时序数据
                     sum_data, diff_data, label = batch
                     sum_data = sum_data.float().to(self.device)
                     diff_data = diff_data.float().to(self.device)
@@ -1892,11 +2500,26 @@ class Exp(object):
                     # 处理标签形状
                     label_squeezed = label.long().squeeze(-1) if label.dim() > 1 else label.long()
                     
+                    # 收集错误分类的样本（没有时序数据的旧版本格式）
+                    for i in range(len(pred)):
+                        if pred[i] != label_squeezed[i]:
+                            misclassified_samples.append({
+                                'sample_index': sample_index + i,
+                                'batch_index': batch_idx,
+                                'true_label': label_squeezed[i].item(),
+                                'predicted_label': pred[i].item(),
+                                'prediction_prob': probs[i].cpu().numpy(),
+                                'data_type': 'DualGAF_v1',
+                                'time_series': None  # 旧版本格式没有时序数据
+                            })
+                    
                     all_preds.extend(pred.cpu().numpy())
                     all_labels.extend(label_squeezed.cpu().numpy())
                     all_probs.extend(probs.cpu().numpy())
+                    sample_index += len(pred)
+                    
                 elif len(batch) == 4:
-                    # 增强双路GAF数据（新版本格式）
+                    # 增强双路GAF数据（新版本格式）- 包含时序数据
                     sum_data, diff_data, time_series_data, label = batch
                     sum_data = sum_data.float().to(self.device)
                     diff_data = diff_data.float().to(self.device)
@@ -1909,9 +2532,27 @@ class Exp(object):
                     # 处理标签形状
                     label_squeezed = label.long().squeeze(-1) if label.dim() > 1 else label.long()
                     
+                    # 收集错误分类的样本（包含时序数据）
+                    for i in range(len(pred)):
+                        if pred[i] != label_squeezed[i]:
+                            # 获取该样本的时序数据 [num_signals, time_length]
+                            sample_time_series = time_series_data[i].cpu().numpy()
+                            
+                            misclassified_samples.append({
+                                'sample_index': sample_index + i,
+                                'batch_index': batch_idx,
+                                'true_label': label_squeezed[i].item(),
+                                'predicted_label': pred[i].item(),
+                                'prediction_prob': probs[i].cpu().numpy(),
+                                'data_type': 'DualGAF_v2',
+                                'time_series': sample_time_series
+                            })
+                    
                     all_preds.extend(pred.cpu().numpy())
                     all_labels.extend(label_squeezed.cpu().numpy())
                     all_probs.extend(probs.cpu().numpy())
+                    sample_index += len(pred)
+                    
                 else:
                     # 普通分类数据
                     batch_x, label = batch
@@ -1924,13 +2565,40 @@ class Exp(object):
                     # 处理标签形状
                     label_squeezed = label.long().squeeze(-1) if label.dim() > 1 else label.long()
                     
+                    # 收集错误分类的样本（普通分类数据可能包含图像时序）
+                    for i in range(len(pred)):
+                        if pred[i] != label_squeezed[i]:
+                            # 对于普通分类数据，假设batch_x是图像序列或时序数据
+                            sample_data = batch_x[i].cpu().numpy()
+                            
+                            misclassified_samples.append({
+                                'sample_index': sample_index + i,
+                                'batch_index': batch_idx,
+                                'true_label': label_squeezed[i].item(),
+                                'predicted_label': pred[i].item(),
+                                'prediction_prob': probs[i].cpu().numpy(),
+                                'data_type': 'Standard',
+                                'time_series': sample_data
+                            })
+                    
                     all_preds.extend(pred.cpu().numpy())
                     all_labels.extend(label_squeezed.cpu().numpy())
                     all_probs.extend(probs.cpu().numpy())
+                    sample_index += len(pred)
+                    
         accuracy = accuracy_score(all_labels, all_preds)
         report = classification_report(all_labels, all_preds, target_names=self.class_names)
         cm = confusion_matrix(all_labels, all_preds)
+        
+        # 绘制混淆矩阵图
         self.plot_confusion_matrix(cm)
+        
+        # 保存混淆矩阵为CSV
+        self.save_confusion_matrix_csv(cm)
+        
+        # 保存分类错误样本的时序数据
+        self.save_misclassified_samples(misclassified_samples)
+        
         return accuracy, report, cm, all_probs
 
 def save_model_checkpoint(model, setting, extra_dict=None):

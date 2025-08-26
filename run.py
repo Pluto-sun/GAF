@@ -51,6 +51,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_class', type=int, default=2, help='number of classes for classification')
     parser.add_argument('--result_path', type=str, default='./result/', help='result path')
     parser.add_argument('--test_size', type=float, default=0.2, help='test size')
+    parser.add_argument('--val_size', type=float, default=0.2, help='validation size')
     parser.add_argument('--rows', type=int, default=None, help='roll size')
     # model define
     parser.add_argument('--seq_len', type=int, default=64, help='input sequence length')
@@ -104,7 +105,7 @@ if __name__ == '__main__':
     parser.add_argument('--attention_type', type=str, default='channel',
                         help='Attention type for DualGAFNet. Options: [channel, spatial, cbam, self, none]')
     parser.add_argument('--classifier_type', type=str, default='mlp',
-                        help='Classifier type for DualGAFNet. Options: [mlp, simple, residual, residual_bottleneck, residual_dense]')
+                        help='Classifier type for DualGAFNet. Options: [mlp, simple, residual, residual_bottleneck, residual_dense, feature_compression, hierarchical, efficient_mlp, efficient_simple, global_pooling, conv1d, separable]')
     
     # 统计特征配置（新增）
     parser.add_argument('--use_statistical_features', action='store_true', default=False, help='是否使用统计特征')
