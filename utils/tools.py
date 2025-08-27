@@ -66,8 +66,108 @@ class EarlyStopping:
     def save_checkpoint(self, val_loss, model, path):
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-        torch.save(model.state_dict(), path + '/' + 'checkpoint.pth')
+        
+        # 安全的模型保存机制 - 解决CUDA内存错误
+        self._safe_save_model(model, path + '/' + 'checkpoint.pth')
         self.val_loss_min = val_loss
+    
+    def _safe_save_model(self, model, save_path):
+        """
+        安全的模型保存方法，处理CUDA内存问题
+        """
+        import gc
+        import time
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                print(f"🔄 尝试保存模型 (第{attempt + 1}次)")
+                
+                # 1. 同步CUDA操作
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                
+                # 2. 清理GPU内存缓存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+                
+                # 3. 强制垃圾回收
+                gc.collect()
+                
+                # 4. 获取模型状态字典并移到CPU
+                print("📦 正在提取模型参数...")
+                if hasattr(model, 'module'):
+                    # 处理DataParallel模型
+                    state_dict = model.module.state_dict()
+                else:
+                    state_dict = model.state_dict()
+                
+                # 5. 确保所有参数都在CPU上
+                print("💻 正在将参数移至CPU...")
+                cpu_state_dict = {}
+                for key, value in state_dict.items():
+                    if torch.is_tensor(value):
+                        cpu_state_dict[key] = value.cpu().clone()
+                    else:
+                        cpu_state_dict[key] = value
+                
+                # 6. 再次清理内存
+                del state_dict
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+                
+                # 7. 保存到文件
+                print("💾 正在保存到文件...")
+                torch.save(cpu_state_dict, save_path)
+                
+                # 8. 验证保存成功
+                if os.path.exists(save_path):
+                    file_size = os.path.getsize(save_path) / (1024 * 1024)  # MB
+                    print(f"✅ 模型保存成功! 文件大小: {file_size:.2f} MB")
+                    
+                    # 清理临时变量
+                    del cpu_state_dict
+                    gc.collect()
+                    return True
+                else:
+                    raise RuntimeError("保存文件不存在")
+                    
+            except Exception as e:
+                print(f"❌ 保存失败 (第{attempt + 1}次): {e}")
+                
+                # 清理可能的残留变量
+                if 'state_dict' in locals():
+                    del state_dict
+                if 'cpu_state_dict' in locals():
+                    del cpu_state_dict
+                
+                # 强制清理GPU内存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+                gc.collect()
+                
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 指数退避：2, 4, 8秒
+                    print(f"⏳ 等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"🚨 模型保存失败，已尝试 {max_retries} 次")
+                    # 尝试保存到备用位置
+                    backup_path = save_path.replace('.pth', '_backup.pth')
+                    try:
+                        print(f"🔄 尝试保存到备用位置: {backup_path}")
+                        # 使用最简单的方式保存
+                        torch.save(model.cpu().state_dict(), backup_path)
+                        print(f"✅ 备用保存成功: {backup_path}")
+                        return True
+                    except Exception as backup_e:
+                        print(f"🚨 备用保存也失败: {backup_e}")
+                        return False
+        
+        return False
 
 
 class dotdict(dict):

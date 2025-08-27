@@ -20,7 +20,7 @@ echo "================================"
 model=DualGAFNet
 data=DualGAF_DDAHU
 root_path="./dataset/DDAHU/direct_5_working"
-epochs=300
+epochs=1
 batch_size=4
 learning_rate=0.0001
 step=96
@@ -86,7 +86,32 @@ large_feature_dim=128
 # echo "--------------------------------"
 
 # 实验2: 使用相关性聚焦的统计特征
-echo "实验2: 相关性聚焦统计特征 + 注意力融合"
+# echo "实验2: 相关性聚焦统计特征 + 注意力融合"
+# python run.py \
+#     --model $model \
+#     --data $data \
+#     --root_path $root_path \
+#     --seq_len $seq_len \
+#     --step $step \
+#     --feature_dim $large_feature_dim \
+#     --extractor_type dilated \
+#     --fusion_type adaptive \
+#     --attention_type self \
+#     --classifier_type feature_compression \
+#     --use_statistical_features \
+#     --stat_type basic \
+#     --multimodal_fusion_strategy concat \
+#     --train_epochs $epochs \
+#     --batch_size $batch_size \
+#     --learning_rate $learning_rate \
+#     --enable_auto_gradient_accumulation \
+#     --ablation_mode none \
+#     --drop_last_batch \
+#     --lr_scheduler_type f1_based \
+#     --loss_preset hvac_hard_samples \
+#     --safe_mode \
+#     --des "分类器压缩+self注意力"
+
 python run.py \
     --model $model \
     --data $data \
@@ -96,11 +121,11 @@ python run.py \
     --feature_dim $large_feature_dim \
     --extractor_type dilated \
     --fusion_type adaptive \
-    --attention_type channel \
-    --classifier_type mlp \
+    --attention_type self \
+    --classifier_type feature_compression \
     --use_statistical_features \
     --stat_type basic \
-    --multimodal_fusion_strategy concat \
+    --multimodal_fusion_strategy gated \
     --train_epochs $epochs \
     --batch_size $batch_size \
     --learning_rate $learning_rate \
@@ -108,9 +133,9 @@ python run.py \
     --ablation_mode none \
     --drop_last_batch \
     --lr_scheduler_type f1_based \
+    --loss_preset hvac_hard_samples \
     --safe_mode \
-    --des "基准版"
-
+    --des "分类器压缩+gated融合"
 echo "实验2完成"
 echo "--------------------------------"
 
