@@ -140,34 +140,34 @@ class LargeKernelDilatedFeatureExtractor(nn.Module):
         self.maxpool = nn.AdaptiveMaxPool2d(1)  # GMP
 
         # 将 128*2 映射回 feature_dim
-        # self.fc = nn.Sequential(
-        #     nn.Linear(128 * 2, feature_dim),
-        #     nn.ReLU(inplace=True),
-        #     nn.Dropout(0.1)
-        # )
         self.fc = nn.Sequential(
-            nn.Linear(128, feature_dim),
+            nn.Linear(128 * 2, feature_dim),
             # nn.ReLU(inplace=True),
             # nn.Dropout(0.1)
         )
+        # self.fc = nn.Sequential(
+        #     nn.Linear(128, feature_dim),
+        #     # nn.ReLU(inplace=True),
+        #     # nn.Dropout(0.1)
+        # )
 
     def forward(self, x):
         # x: [N, 1, H, W]
         x = self.conv1(x) # [N, 32, H/2, W/2]
         x = self.conv2(x) # [N, 64, H/4, W/4]
         x = self.conv3(x) # [N, 128, H/8, W/8]
-        # avg_feat = self.avgpool(x)  # [N, 128, 1, 1]
-        # max_feat = self.maxpool(x)  # [N, 128, 1, 1]
+        avg_feat = self.avgpool(x)  # [N, 128, 1, 1]
+        max_feat = self.maxpool(x)  # [N, 128, 1, 1]
 
-        # # 拼接并展平
-        # fused_pool = torch.cat([avg_feat, max_feat], dim=1)  # [N, 256, 1, 1]
-        # fused_pool = fused_pool.view(fused_pool.size(0), -1)  # [N, 256]
+        # 拼接并展平
+        fused_pool = torch.cat([avg_feat, max_feat], dim=1)  # [N, 256, 1, 1]
+        fused_pool = fused_pool.view(fused_pool.size(0), -1)  # [N, 256]
 
-        # # 投影回目标维度
-        # x = self.fc(fused_pool)  # [N, feature_dim]
-        avg_feat = self.avgpool(x)
-        avg_feat = avg_feat.view(avg_feat.size(0), -1)
-        x = self.fc(avg_feat)
+        # 投影回目标维度
+        x = self.fc(fused_pool)  # [N, feature_dim]
+        # avg_feat = self.avgpool(x)
+        # avg_feat = avg_feat.view(avg_feat.size(0), -1)
+        # x = self.fc(avg_feat)
 
         return x
 

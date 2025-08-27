@@ -16,6 +16,562 @@ from models.ChannelCompressionModule import (
 )
 
 
+# ===== 参数高效分类器组件 =====
+
+class EfficientClassifier(nn.Module):
+    """参数高效的分类器，通过降维技术减少参数量"""
+    
+    def __init__(self, input_dim, num_classes, reduction_method='pooling_projection', 
+                 intermediate_dim=512, classifier_type='mlp'):
+        super().__init__()
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        self.reduction_method = reduction_method
+        self.intermediate_dim = intermediate_dim
+        
+        if reduction_method == 'pooling_projection':
+            # 方法1: 先做线性投影降维，再分类
+            self.reducer = nn.Sequential(
+                nn.Linear(input_dim, intermediate_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2)
+            )
+            final_dim = intermediate_dim
+            
+        elif reduction_method == 'attention_pooling':
+            # 方法2: 注意力机制降维
+            self.attention = nn.Sequential(
+                nn.Linear(input_dim, intermediate_dim),
+                nn.Tanh(),
+                nn.Linear(intermediate_dim, 1),
+                nn.Softmax(dim=1)
+            )
+            self.projection = nn.Linear(input_dim, intermediate_dim)
+            final_dim = intermediate_dim
+            
+        else:
+            raise ValueError(f"不支持的降维方法: {reduction_method}")
+        
+        # 构建分类器
+        if classifier_type == 'mlp':
+            self.classifier = nn.Sequential(
+                nn.Linear(final_dim, 256),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Linear(128, num_classes)
+            )
+        else:  # simple
+            self.classifier = nn.Sequential(
+                nn.Linear(final_dim, 128),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(128, num_classes)
+            )
+    
+    def forward(self, x):
+        # x: [batch_size, input_dim]
+        if self.reduction_method == 'pooling_projection':
+            x = self.reducer(x)
+        elif self.reduction_method == 'attention_pooling':
+            # 注意力加权平均
+            attention_weights = self.attention(x)  # [batch_size, 1]
+            x = self.projection(x) * attention_weights  # 加权投影
+        
+        return self.classifier(x)
+
+
+class GlobalPoolingClassifier(nn.Module):
+    """全局池化分类器，最参数高效的选择"""
+    
+    def __init__(self, input_feature_dim, num_signals, num_classes, pooling_type='adaptive'):
+        super().__init__()
+        self.input_feature_dim = input_feature_dim
+        self.num_signals = num_signals
+        self.pooling_type = pooling_type
+        
+        if pooling_type == 'mean':
+            # 简单平均池化
+            self.pooling = lambda x: torch.mean(x, dim=1)
+            final_dim = input_feature_dim
+            
+        elif pooling_type == 'max':
+            # 最大池化
+            self.pooling = lambda x: torch.max(x, dim=1)[0]
+            final_dim = input_feature_dim
+            
+        elif pooling_type == 'attention':
+            # 注意力池化
+            self.attention = nn.Sequential(
+                nn.Linear(input_feature_dim, input_feature_dim // 4),
+                nn.ReLU(),
+                nn.Linear(input_feature_dim // 4, 1),
+                nn.Softmax(dim=1)
+            )
+            final_dim = input_feature_dim
+            
+        elif pooling_type == 'adaptive':
+            # 自适应池化（结合多种池化方式）
+            self.attention = nn.Sequential(
+                nn.Linear(input_feature_dim, input_feature_dim // 4),
+                nn.ReLU(),
+                nn.Linear(input_feature_dim // 4, 1),
+                nn.Softmax(dim=1)
+            )
+            # 融合不同池化结果
+            final_dim = input_feature_dim * 3  # mean + max + attention
+            
+        # 轻量级分类器
+        self.classifier = nn.Sequential(
+            nn.Linear(final_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(256, num_classes)
+        )
+    
+    def forward(self, x):
+        # x: [batch_size, num_signals * feature_dim] -> [batch_size, num_signals, feature_dim]
+        x = x.view(x.size(0), self.num_signals, self.input_feature_dim)
+        
+        if self.pooling_type == 'mean':
+            pooled = torch.mean(x, dim=1)  # [batch_size, feature_dim]
+        elif self.pooling_type == 'max':
+            pooled = torch.max(x, dim=1)[0]  # [batch_size, feature_dim]
+        elif self.pooling_type == 'attention':
+            attention_weights = self.attention(x)  # [batch_size, num_signals, 1]
+            pooled = torch.sum(x * attention_weights, dim=1)  # [batch_size, feature_dim]
+        elif self.pooling_type == 'adaptive':
+            # 结合多种池化
+            mean_pooled = torch.mean(x, dim=1)
+            max_pooled = torch.max(x, dim=1)[0]
+            attention_weights = self.attention(x)
+            att_pooled = torch.sum(x * attention_weights, dim=1)
+            pooled = torch.cat([mean_pooled, max_pooled, att_pooled], dim=1)
+        
+        return self.classifier(pooled)
+
+
+class Conv1DClassifier(nn.Module):
+    """1D卷积分类器，将特征序列当作1D信号处理"""
+    
+    def __init__(self, input_feature_dim, num_signals, num_classes, hidden_channels=[256, 128, 64]):
+        super().__init__()
+        self.input_feature_dim = input_feature_dim
+        self.num_signals = num_signals
+        
+        # 1D卷积网络
+        layers = []
+        in_channels = input_feature_dim
+        
+        for hidden_dim in hidden_channels:
+            layers.extend([
+                nn.Conv1d(in_channels, hidden_dim, kernel_size=3, padding=1),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.2)
+            ])
+            in_channels = hidden_dim
+        
+        # 全局池化
+        layers.append(nn.AdaptiveAvgPool1d(1))
+        
+        self.conv_layers = nn.Sequential(*layers)
+        
+        # 分类器
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_channels[-1], 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, num_classes)
+        )
+    
+    def forward(self, x):
+        # x: [batch_size, num_signals * feature_dim] -> [batch_size, feature_dim, num_signals]
+        batch_size = x.size(0)
+        x = x.view(batch_size, self.num_signals, self.input_feature_dim)
+        x = x.transpose(1, 2)  # [batch_size, feature_dim, num_signals]
+        
+        # 1D卷积处理
+        x = self.conv_layers(x)  # [batch_size, hidden_channels[-1], 1]
+        x = x.squeeze(-1)  # [batch_size, hidden_channels[-1]]
+        
+        return self.classifier(x)
+
+
+class SeparableClassifier(nn.Module):
+    """分离式分类器，先对每个信号独立分类，再融合结果"""
+    
+    def __init__(self, input_feature_dim, num_signals, num_classes, fusion_method='attention'):
+        super().__init__()
+        self.input_feature_dim = input_feature_dim
+        self.num_signals = num_signals
+        self.fusion_method = fusion_method
+        
+        # 每个信号的独立分类器（参数共享）
+        self.signal_classifier = nn.Sequential(
+            nn.Linear(input_feature_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, num_classes)
+        )
+        
+        if fusion_method == 'attention':
+            # 注意力融合
+            self.attention = nn.Sequential(
+                nn.Linear(num_classes, 64),
+                nn.ReLU(),
+                nn.Linear(64, 1),
+                nn.Softmax(dim=1)
+            )
+        elif fusion_method == 'weighted':
+            # 可学习权重融合
+            self.weights = nn.Parameter(torch.ones(num_signals) / num_signals)
+    
+    def forward(self, x):
+        # x: [batch_size, num_signals * feature_dim] -> [batch_size, num_signals, feature_dim]
+        batch_size = x.size(0)
+        x = x.view(batch_size, self.num_signals, self.input_feature_dim)
+        
+        # 对每个信号独立分类
+        signal_outputs = []
+        for i in range(self.num_signals):
+            signal_out = self.signal_classifier(x[:, i, :])  # [batch_size, num_classes]
+            signal_outputs.append(signal_out)
+        
+        # 堆叠所有信号的输出
+        signal_outputs = torch.stack(signal_outputs, dim=1)  # [batch_size, num_signals, num_classes]
+        
+        # 融合策略
+        if self.fusion_method == 'mean':
+            output = torch.mean(signal_outputs, dim=1)
+        elif self.fusion_method == 'max':
+            output = torch.max(signal_outputs, dim=1)[0]
+        elif self.fusion_method == 'attention':
+            attention_weights = self.attention(signal_outputs)  # [batch_size, num_signals, 1]
+            output = torch.sum(signal_outputs * attention_weights, dim=1)
+        elif self.fusion_method == 'weighted':
+            weights = F.softmax(self.weights, dim=0)  # 归一化权重
+            output = torch.sum(signal_outputs * weights.view(1, -1, 1), dim=1)
+        
+        return output
+
+
+class FeatureCompressionClassifier(nn.Module):
+    """
+    特征维度压缩分类器（简化版）
+    
+    只压缩特征维度，不压缩信号维度，保持较好的性能平衡
+    - 特征压缩：128维 → 32维 
+    - 保持信号数量不变
+    - 简单的MLP分类器
+    """
+    
+    def __init__(self, input_feature_dim, num_signals, num_classes, 
+                 compressed_feature_dim=32):
+        super().__init__()
+        self.input_feature_dim = input_feature_dim
+        self.num_signals = num_signals
+        self.num_classes = num_classes
+        
+        # 自适应计算压缩特征维度
+        if compressed_feature_dim is None:
+            if input_feature_dim >= 128:
+                self.compressed_feature_dim = 32
+            elif input_feature_dim >= 64:
+                self.compressed_feature_dim = 16
+            else:
+                self.compressed_feature_dim = max(8, input_feature_dim // 4)
+        else:
+            self.compressed_feature_dim = compressed_feature_dim
+        
+        print(f"🎯 构建特征压缩分类器: 特征{input_feature_dim}→{self.compressed_feature_dim}, 信号{num_signals}(保持不变) -> {num_classes}")
+        print(f"   🔸 特征压缩比: {self.compressed_feature_dim/input_feature_dim:.3f}")
+        print(f"   🔸 原始维度: {num_signals * input_feature_dim} → 压缩维度: {num_signals * self.compressed_feature_dim}")
+        
+        # 特征压缩层：每个信号独立压缩特征维度
+        self.feature_compress = nn.Sequential(
+            nn.Linear(input_feature_dim, self.compressed_feature_dim),
+            nn.BatchNorm1d(num_signals),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1)
+        )
+        
+        # 简单的MLP分类器
+        final_dim = num_signals * self.compressed_feature_dim
+        hidden_dim = min(final_dim // 2, 512)  # 适中的隐藏层大小
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(final_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, num_classes)
+        )
+        
+        # 初始化权重
+        self._initialize_weights()
+        
+        # 计算参数统计
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f"   🔸 总参数量: {total_params:,} ({total_params/1000:.1f}K)")
+    
+    def _initialize_weights(self):
+        """初始化网络权重"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x):
+        """
+        特征压缩前向传播
+        Args:
+            x: [batch_size, num_signals * input_feature_dim] - 从DualGAFNet来的扁平化特征
+        Returns:
+            output: [batch_size, num_classes]
+        """
+        batch_size = x.size(0)
+        
+        # 重塑输入: [B, num_signals * feature_dim] → [B, num_signals, feature_dim]
+        x = x.view(batch_size, self.num_signals, self.input_feature_dim)
+        
+        # 特征压缩: [B, num_signals, input_feature_dim] → [B, num_signals, compressed_feature_dim]
+        compressed_features = self.feature_compress(x)  # [B, num_signals, compressed_feature_dim]
+        
+        # 展平: [B, num_signals, compressed_feature_dim] → [B, num_signals * compressed_feature_dim]
+        flattened = compressed_features.reshape(batch_size, -1)
+        
+        # 分类
+        output = self.classifier(flattened)  # [B, num_classes]
+        
+        return output
+    
+    def get_compression_stats(self):
+        """获取压缩统计信息"""
+        original_dim = self.num_signals * self.input_feature_dim
+        compressed_dim = self.num_signals * self.compressed_feature_dim
+        compression_ratio = compressed_dim / original_dim
+        
+        return {
+            'feature_compression_ratio': self.compressed_feature_dim / self.input_feature_dim,
+            'overall_compression': compression_ratio,
+            'original_dim': original_dim,
+            'compressed_dim': compressed_dim,
+            'param_reduction': 1 - compression_ratio  # 参数减少比例的近似
+        }
+
+
+class HierarchicalCompressionClassifier(nn.Module):
+    """分层压缩分类器：先压缩特征维度，再压缩信号维度"""
+    
+    def __init__(self, input_feature_dim, num_signals, num_classes, 
+                 compressed_feature_dim=32, compressed_signals=None, 
+                 intermediate_dim=256, compression_ratio=0.6):
+        super().__init__()
+        self.input_feature_dim = input_feature_dim
+        self.num_signals = num_signals
+        self.compressed_feature_dim = compressed_feature_dim
+        
+        # 自动计算压缩后的信号数量
+        if compressed_signals is None:
+            self.compressed_signals = max(16, int(num_signals * compression_ratio))
+        else:
+            self.compressed_signals = compressed_signals
+        
+        print(f"🏗️ 分层压缩配置:")
+        print(f"   特征维度压缩: {input_feature_dim} → {compressed_feature_dim}")
+        print(f"   信号维度压缩: {num_signals} → {self.compressed_signals}")
+        print(f"   压缩比例: 特征{compressed_feature_dim/input_feature_dim:.2f}, 信号{self.compressed_signals/num_signals:.2f}")
+        
+        # 阶段1: 单信号特征压缩 (特征降维)
+        # 每个信号独立进行特征压缩: input_feature_dim → compressed_feature_dim
+        self.signal_feature_compress = nn.Sequential(
+            nn.Linear(input_feature_dim, compressed_feature_dim * 2),
+            nn.BatchNorm1d(num_signals),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            
+            nn.Linear(compressed_feature_dim * 2, compressed_feature_dim),
+            nn.BatchNorm1d(num_signals),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1)
+        )
+        
+        # 阶段2: 信号重要性注意力机制 (类似ChannelAttention)
+        # 目标：为每个信号计算一个重要性分数
+        # 输入：[B, num_signals, compressed_feature_dim] 
+        # 输出：[B, num_signals, 1]
+        
+        # 全局池化：获取每个信号的全局特征表示
+        self.signal_avg_pool = nn.AdaptiveAvgPool1d(1)  # 全局平均池化
+        self.signal_max_pool = nn.AdaptiveMaxPool1d(1)  # 全局最大池化
+        
+        # MLP：学习信号间的关系（reduction策略）
+        # 输入/输出都是num_signals维度，中间层进行压缩
+        reduction = max(1, num_signals // 8)  # 至少为1，通常压缩8倍
+        self.signal_fc = nn.Sequential(
+            nn.Linear(num_signals, reduction),    # [B, num_signals] → [B, reduction]
+            nn.ReLU(inplace=True),
+            nn.Linear(reduction, num_signals)     # [B, reduction] → [B, num_signals]
+        )
+        
+        self.signal_sigmoid = nn.Sigmoid()
+        
+        # 阶段3: 信号融合 (跨信号的信息融合)
+        # num_signals → compressed_signals
+        self.signal_fusion = nn.Sequential(
+            nn.Linear(num_signals, self.compressed_signals * 2),
+            nn.BatchNorm1d(compressed_feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.15),
+            
+            nn.Linear(self.compressed_signals * 2, self.compressed_signals),
+            nn.BatchNorm1d(compressed_feature_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.15)
+        )
+        
+        # 阶段4: 矩阵分解的分类头
+        final_dim = self.compressed_signals * compressed_feature_dim
+        
+        # 矩阵分解: 避免直接大矩阵乘法
+        # 原始: final_dim → large_hidden → num_classes 需要大量参数
+        # 分解: final_dim → intermediate_dim → intermediate_dim*2 → num_classes 参数更少
+        self.classifier_decomp = nn.Sequential(
+            # 第一层分解 - 主要降维
+            nn.Linear(final_dim, intermediate_dim),
+            nn.BatchNorm1d(intermediate_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            
+            # 第二层分解 - 特征重组
+            nn.Linear(intermediate_dim, intermediate_dim * 2),
+            nn.BatchNorm1d(intermediate_dim * 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            
+            # 最终分类层
+            nn.Linear(intermediate_dim * 2, num_classes)
+        )
+        
+        # 权重初始化
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """权重初始化"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x):
+        """
+        分层压缩前向传播
+        Args:
+            x: [batch_size, num_signals * input_feature_dim] - 从DualGAFNet来的扁平化特征
+        Returns:
+            output: [batch_size, num_classes]
+        """
+        batch_size = x.size(0)
+        
+        # 重塑输入: [B, num_signals * feature_dim] → [B, num_signals, feature_dim]
+        x = x.view(batch_size, self.num_signals, self.input_feature_dim)
+        
+        # 阶段1: 单信号特征压缩
+        # 每个信号独立压缩: [B, num_signals, input_feature_dim] → [B, num_signals, compressed_feature_dim]
+        signal_compressed = self.signal_feature_compress(x)  # [B, num_signals, compressed_feature_dim]
+        
+        # 阶段2: 信号重要性注意力 (类似ChannelAttention的方式)
+        # signal_compressed: [B, num_signals, compressed_feature_dim]
+        B, num_signals, compressed_feature_dim = signal_compressed.shape
+        
+        # 对每个信号的特征维度进行全局池化，获取每个信号的全局表示
+        # [B, num_signals, compressed_feature_dim] → [B, num_signals, 1] → [B, num_signals]
+        avg_signal_repr = self.signal_avg_pool(signal_compressed).squeeze(-1)  # [B, num_signals]
+        max_signal_repr = self.signal_max_pool(signal_compressed).squeeze(-1)  # [B, num_signals]
+        
+        # 通过MLP学习信号间的关系
+        # [B, num_signals] → [B, num_signals]
+        avg_attention = self.signal_fc(avg_signal_repr)  # [B, num_signals]
+        max_attention = self.signal_fc(max_signal_repr)  # [B, num_signals]
+        
+        # 融合平均池化和最大池化的注意力，得到每个信号的重要性分数
+        signal_importance = self.signal_sigmoid(avg_attention + max_attention)  # [B, num_signals]
+        signal_importance = signal_importance.unsqueeze(-1)  # [B, num_signals, 1]
+        
+        # 应用注意力权重：逐元素相乘
+        weighted_signals = signal_compressed * signal_importance  # [B, num_signals, compressed_feature_dim]
+        
+        # 阶段3: 信号融合
+        # 跨信号维度的信息融合: [B, num_signals, compressed_feature_dim] → [B, compressed_signals, compressed_feature_dim]
+        # 转置后融合: [B, compressed_feature_dim, num_signals] → [B, compressed_feature_dim, compressed_signals] → [B, compressed_signals, compressed_feature_dim]
+        signals_transposed = weighted_signals.transpose(1, 2)  # [B, compressed_feature_dim, num_signals]
+        fused_signals = self.signal_fusion(signals_transposed)  # [B, compressed_feature_dim, compressed_signals]
+        fused_signals = fused_signals.transpose(1, 2)  # [B, compressed_signals, compressed_feature_dim]
+        
+        # 阶段4: 分类
+        # 展平并通过分解的分类器（使用reshape处理非连续内存）
+        flattened = fused_signals.reshape(batch_size, -1)  # [B, compressed_signals * compressed_feature_dim]
+        output = self.classifier_decomp(flattened)  # [B, num_classes]
+        
+        return output
+    
+    def get_signal_importance(self, x):
+        """
+        获取信号重要性分数，用于分析哪些信号更重要
+        
+        Args:
+            x: [batch_size, num_signals * input_feature_dim] - 原始输入
+        Returns:
+            importance: [batch_size, num_signals] - 各信号的重要性分数
+        """
+        batch_size = x.size(0)
+        x = x.view(batch_size, self.num_signals, self.input_feature_dim)
+        
+        with torch.no_grad():
+            signal_compressed = self.signal_feature_compress(x)  # [B, num_signals, compressed_feature_dim]
+            
+            # 使用新的ChannelAttention风格计算信号重要性
+            avg_signal_repr = self.signal_avg_pool(signal_compressed).squeeze(-1)  # [B, num_signals]
+            max_signal_repr = self.signal_max_pool(signal_compressed).squeeze(-1)  # [B, num_signals]
+            
+            avg_attention = self.signal_fc(avg_signal_repr)  # [B, num_signals]
+            max_attention = self.signal_fc(max_signal_repr)  # [B, num_signals]
+            
+            signal_importance = self.signal_sigmoid(avg_attention + max_attention)  # [B, num_signals]
+            return signal_importance  # [B, num_signals]
+    
+    def get_compression_stats(self):
+        """获取压缩统计信息"""
+        original_params = self.num_signals * self.input_feature_dim * 1024  # 假设原始分类器第一层1024
+        current_params = sum(p.numel() for p in self.parameters())
+        
+        feature_compression_ratio = self.compressed_feature_dim / self.input_feature_dim
+        signal_compression_ratio = self.compressed_signals / self.num_signals
+        overall_compression = feature_compression_ratio * signal_compression_ratio
+        
+        return {
+            'feature_compression_ratio': feature_compression_ratio,
+            'signal_compression_ratio': signal_compression_ratio,
+            'overall_compression': overall_compression,
+            'param_reduction': 1 - (current_params / original_params),
+            'original_dim': self.num_signals * self.input_feature_dim,
+            'compressed_dim': self.compressed_signals * self.compressed_feature_dim
+        }
+
+
+# ===== 原有组件 =====
+
 class BasicBlock(nn.Module):
     """ResNet基础块 - 从MultiImageFeatureNet移植并优化"""
 
@@ -1944,6 +2500,30 @@ class DualGAFNet(nn.Module):
         else:
             final_feature_dim = self.feature_dim * self.num_images
 
+        # 🔥 检测高维特征并自动选择参数高效的分类器
+        # if final_feature_dim > 2048:
+        #     print(f"⚠️ 检测到高维特征 ({final_feature_dim}维)，自动启用参数高效分类器")
+            
+        #     # 根据信号数量和特征维度智能选择最优分类器
+        #     num_signals = self.compressed_num_images if self.use_channel_compression else self.num_images
+            
+        #     if num_signals >= 100 and self.feature_dim >= 128:
+        #         # 超大量信号 + 超高维特征 -> 分层压缩（最激进）
+        #         if self.classifier_type in ['mlp', 'simple']:
+        #             print(f"   自动切换: {self.classifier_type} -> hierarchical (超大规模数据)")
+        #             self.classifier_type = 'hierarchical'
+        #     elif num_signals >= 30 and self.feature_dim >= 64:
+        #         # 中大量信号 + 高维特征 -> 特征压缩（温和方案）
+        #         if self.classifier_type in ['mlp', 'simple']:
+        #             print(f"   自动切换: {self.classifier_type} -> feature_compression (平衡方案)")
+        #             self.classifier_type = 'feature_compression'
+        #     elif self.classifier_type == 'mlp':
+        #         print(f"   自动切换: mlp -> efficient_mlp")
+        #         self.classifier_type = 'efficient_mlp'
+        #     elif self.classifier_type == 'simple':
+        #         print(f"   自动切换: simple -> efficient_simple")
+        #         self.classifier_type = 'efficient_simple'
+
         if self.classifier_type == 'mlp':
             self.classifier = nn.Sequential(
                 nn.Linear(final_feature_dim, 2048),
@@ -1963,6 +2543,119 @@ class DualGAFNet(nn.Module):
                 nn.Dropout(0.2),
                 nn.Linear(512, num_classes),
             )
+        elif self.classifier_type == 'efficient_mlp':
+            # 🚀 参数高效的MLP分类器
+            self.classifier = EfficientClassifier(
+                input_dim=final_feature_dim,
+                num_classes=num_classes,
+                reduction_method='pooling_projection',  # 先池化再投影
+                intermediate_dim=512,
+                classifier_type='mlp'
+            )
+            print(f"🚀 构建参数高效MLP分类器: {final_feature_dim} -> 池化+投影 -> 512 -> {num_classes}")
+            
+        elif self.classifier_type == 'efficient_simple':
+            # 🚀 参数高效的简单分类器
+            self.classifier = EfficientClassifier(
+                input_dim=final_feature_dim,
+                num_classes=num_classes,
+                reduction_method='attention_pooling',  # 注意力池化
+                intermediate_dim=256,
+                classifier_type='simple'
+            )
+            print(f"🚀 构建参数高效简单分类器: {final_feature_dim} -> 注意力池化 -> 256 -> {num_classes}")
+            
+        elif self.classifier_type == 'global_pooling':
+            # 🎯 全局池化分类器（最参数高效）
+            self.classifier = GlobalPoolingClassifier(
+                input_feature_dim=self.feature_dim,
+                num_signals=self.compressed_num_images if self.use_channel_compression else self.num_images,
+                num_classes=num_classes,
+                pooling_type='adaptive'  # 'mean', 'max', 'attention', 'adaptive'
+            )
+            print(f"🎯 构建全局池化分类器: ({self.feature_dim}, {self.num_images}) -> 自适应池化 -> {num_classes}")
+            
+        elif self.classifier_type == 'conv1d':
+            # 🔥 1D卷积分类器（处理序列特征）
+            self.classifier = Conv1DClassifier(
+                input_feature_dim=self.feature_dim,
+                num_signals=self.compressed_num_images if self.use_channel_compression else self.num_images,
+                num_classes=num_classes,
+                hidden_channels=[256, 128, 64]
+            )
+            print(f"🔥 构建1D卷积分类器: ({self.feature_dim}, {self.num_images}) -> Conv1D -> {num_classes}")
+            
+        elif self.classifier_type == 'separable':
+            # ⚡ 分离式分类器（先分别处理再融合）
+            self.classifier = SeparableClassifier(
+                input_feature_dim=self.feature_dim,
+                num_signals=self.compressed_num_images if self.use_channel_compression else self.num_images,
+                num_classes=num_classes,
+                fusion_method='attention'  # 'mean', 'max', 'attention', 'weighted'
+            )
+            print(f"⚡ 构建分离式分类器: 每信号独立分类 -> 注意力融合 -> {num_classes}")
+            
+        elif self.classifier_type == 'feature_compression':
+            # 🎯 特征压缩分类器（中间版本：只压缩特征维度）
+            num_signals_for_compression = self.compressed_num_images if self.use_channel_compression else self.num_images
+            
+            # 自适应压缩特征维度
+            if self.feature_dim >= 128:
+                compressed_feature_dim = 32
+            elif self.feature_dim >= 64:
+                compressed_feature_dim = 16
+            else:
+                compressed_feature_dim = max(8, self.feature_dim // 4)
+            
+            self.classifier = FeatureCompressionClassifier(
+                input_feature_dim=self.feature_dim,
+                num_signals=num_signals_for_compression,
+                num_classes=num_classes,
+                compressed_feature_dim=compressed_feature_dim
+            )
+            print(f"🎯 构建特征压缩分类器: 特征{self.feature_dim}→{compressed_feature_dim}, 信号{num_signals_for_compression}(保持不变) -> {num_classes}")
+            
+        elif self.classifier_type == 'hierarchical':
+            # 🎯 分层压缩分类器（test.py方案集成版）
+            num_signals_for_compression = self.compressed_num_images if self.use_channel_compression else self.num_images
+            
+            # 自适应压缩参数
+            if self.feature_dim >= 128:
+                compressed_feature_dim = 32
+            elif self.feature_dim >= 64:
+                compressed_feature_dim = 16
+            else:
+                compressed_feature_dim = max(8, self.feature_dim // 4)
+            
+            # 信号压缩比例：信号越多，压缩越厉害
+            if num_signals_for_compression >= 100:
+                compression_ratio = 0.4  # 压缩到40%
+            elif num_signals_for_compression >= 50:
+                compression_ratio = 0.5  # 压缩到50%
+            elif num_signals_for_compression >= 20:
+                compression_ratio = 0.6  # 压缩到60%
+            else:
+                compression_ratio = 0.8  # 压缩到80%
+            
+            self.classifier = HierarchicalCompressionClassifier(
+                input_feature_dim=self.feature_dim,
+                num_signals=num_signals_for_compression,
+                num_classes=num_classes,
+                compressed_feature_dim=compressed_feature_dim,
+                compressed_signals=None,  # 自动计算
+                intermediate_dim=256,
+                compression_ratio=compression_ratio
+            )
+            print(f"🎯 构建分层压缩分类器: 特征{self.feature_dim}→{compressed_feature_dim}, 信号{num_signals_for_compression}→{int(num_signals_for_compression*compression_ratio)} -> {num_classes}")
+            
+            # 显示压缩统计
+            if hasattr(self.classifier, 'get_compression_stats'):
+                stats = self.classifier.get_compression_stats()
+                print(f"   🔸 特征压缩比: {stats['feature_compression_ratio']:.3f}")
+                print(f"   🔸 信号压缩比: {stats['signal_compression_ratio']:.3f}")
+                print(f"   🔸 整体压缩比: {stats['overall_compression']:.3f}")
+                print(f"   🔸 原始维度: {stats['original_dim']} → 压缩维度: {stats['compressed_dim']}")
+            
         elif self.classifier_type == 'residual':
             # 基础残差分类器
             self.classifier = ResidualClassifier(
@@ -2004,8 +2697,13 @@ class DualGAFNet(nn.Module):
         else:
             raise ValueError(f"不支持的分类器类型: {self.classifier_type}")
 
-        print(
-            f"✅ 分类器构建完成: 类型={self.classifier_type}, 输入维度={final_feature_dim}, 输出类别={num_classes}")
+        # 计算并显示分类器参数量
+        if hasattr(self.classifier, 'parameters'):
+            classifier_params = sum(p.numel() for p in self.classifier.parameters())
+            print(f"✅ 分类器构建完成: 类型={self.classifier_type}, 输入维度={final_feature_dim}, 输出类别={num_classes}")
+            print(f"   分类器参数量: {classifier_params:,} ({classifier_params/1000:.1f}K)")
+        else:
+            print(f"✅ 分类器构建完成: 类型={self.classifier_type}, 输入维度={final_feature_dim}, 输出类别={num_classes}")
     
     def print_model_structure(self, input_shape=None, detailed=True):
         """
